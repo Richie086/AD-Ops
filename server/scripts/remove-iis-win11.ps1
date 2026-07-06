@@ -62,25 +62,38 @@ function Stop-NodePortProcess {
 }
 
 function Remove-IisObjects {
-    Import-Module WebAdministration
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
+    if (-not (Get-Module WebAdministration)) {
+        # Fallback for newer PowerShell editions if normal import fails
+        Import-Module WebAdministration -SkipEditionCheck -ErrorAction SilentlyContinue
+    }
 
-    if (Test-Path IIS:\Sites\$SiteName) {
+    if (Test-Path "IIS:\Sites\$SiteName") {
         Write-Step "Stopping and removing IIS site '$SiteName'"
         try {
-            Stop-Website -Name $SiteName -ErrorAction SilentlyContinue
+            # Check if site exists first to satisfy the provider
+            $site = Get-Website -Name $SiteName -ErrorAction SilentlyContinue
+            if ($site) {
+                Stop-Website -Name $SiteName -ErrorAction SilentlyContinue
+                Remove-Website -Name $SiteName
+            }
         }
         catch {
-            # ignore if site is already stopped
+            Write-Step "Error removing site: $($_.Exception.Message)"
         }
-        Remove-Website -Name $SiteName
     }
     else {
         Write-Step "IIS site '$SiteName' not found, skipping"
     }
 
-    if (Test-Path IIS:\AppPools\$AppPoolName) {
+    if (Test-Path "IIS:\AppPools\$AppPoolName") {
         Write-Step "Removing IIS app pool '$AppPoolName'"
-        Remove-WebAppPool -Name $AppPoolName
+        try {
+            Remove-WebAppPool -Name $AppPoolName -ErrorAction SilentlyContinue
+        }
+        catch {
+             Write-Step "Error removing app pool: $($_.Exception.Message)"
+        }
     }
     else {
         Write-Step "IIS app pool '$AppPoolName' not found, skipping"
