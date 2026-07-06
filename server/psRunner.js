@@ -36,12 +36,15 @@ function invokeWrapper(payload, commandForDisplay) {
 
     proc.on('close', (code) => {
       const marker = '===JSON===';
-      const idx = stdout.indexOf(marker);
       let data = null;
       let parseError = null;
 
+      const idx = stdout.lastIndexOf(marker);
       if (idx !== -1) {
-        const jsonText = stdout.slice(idx + marker.length).trim();
+        let jsonText = stdout.slice(idx + marker.length).replace(/^\uFEFF/, '').trim();
+        // WinRM/CLIXML noise can land after the marker; grab the first JSON value.
+        const jsonStart = jsonText.search(/[\[{]/);
+        if (jsonStart > 0) jsonText = jsonText.slice(jsonStart);
         try {
           data = jsonText ? JSON.parse(jsonText) : [];
         } catch (e) {
@@ -53,12 +56,14 @@ function invokeWrapper(payload, commandForDisplay) {
 
       const rawCombined = [stdout, stderr].filter(Boolean).join('\n---STDERR---\n');
 
-      if (code !== 0 && data && data.error) {
+      if (parseError) {
+        resolve({ ok: false, data: null, raw: rawCombined, command: commandForDisplay, error: parseError });
+      } else if (code !== 0 && data && data.error) {
         resolve({ ok: false, data: null, raw: rawCombined, command: commandForDisplay, error: data.message });
       } else if (code !== 0) {
-        resolve({ ok: false, data: null, raw: rawCombined, command: commandForDisplay, error: stderr || parseError || 'PowerShell exited with an error.' });
+        resolve({ ok: false, data: null, raw: rawCombined, command: commandForDisplay, error: stderr || 'PowerShell exited with an error.' });
       } else {
-        resolve({ ok: true, data, raw: rawCombined, command: commandForDisplay, error: parseError });
+        resolve({ ok: true, data, raw: rawCombined, command: commandForDisplay });
       }
     });
 

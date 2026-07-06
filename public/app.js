@@ -261,6 +261,10 @@
     } catch (err) {
       state.connected = false;
       updateConnStatus();
+      if (err.raw || err.command) {
+        state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Domain connect failed' };
+        renderResults();
+      }
       showError(err);
     }
   });
@@ -400,6 +404,10 @@
     const banner = $('#errorBanner');
     banner.textContent = err.message || 'An error occurred.';
     banner.classList.remove('hidden');
+    if (err.raw && !state.lastResult?.raw) {
+      state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Error details' };
+      renderResults();
+    }
   }
   function hideError() {
     $('#errorBanner').classList.add('hidden');

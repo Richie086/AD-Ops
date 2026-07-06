@@ -16,6 +16,14 @@
 # caller can split structured data from any preceding warnings on stdout.
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+function Write-JsonResult {
+    param([object]$Payload)
+    $json = if ($null -eq $Payload) { '[]' } else { $Payload | ConvertTo-Json -Depth 8 -Compress -EnumerateCollection }
+    Write-Output ("===JSON===`n" + $json)
+}
+
 $raw = [Console]::In.ReadToEnd()
 $data = $raw | ConvertFrom-Json
 
@@ -44,8 +52,7 @@ if ($data.Mode -eq 'perTarget') {
         }
     }
 
-    Write-Output "===JSON==="
-    $results | ConvertTo-Json -Depth 8 -EnumerateCollection
+    Write-JsonResult $results
     exit 0
 }
 
@@ -68,18 +75,10 @@ try {
         $params.ArgumentList = $data.Args
     }
 
-    $result = Invoke-Command @params
-
-    Write-Output "===JSON==="
-    if ($null -eq $result) {
-        Write-Output "[]"
-    } else {
-        $result | ConvertTo-Json -Depth 8 -EnumerateCollection
-    }
+    $result = Invoke-Command @params -WarningAction SilentlyContinue
+    Write-JsonResult $result
 }
 catch {
-    Write-Output "===JSON==="
-    $errObj = @{ error = $true; message = $_.Exception.Message }
-    $errObj | ConvertTo-Json
+    Write-JsonResult @{ error = $true; message = $_.Exception.Message }
     exit 1
 }
