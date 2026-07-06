@@ -63,16 +63,15 @@ if (!cols.includes('role')) {
 const VALID_ROLES = ['viewer', 'operator', 'admin'];
 
 // Bootstrap a default local admin account on first run only.
-const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
-if (userCount === 0) {
-  const tempPassword = crypto.randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12);
-  const hash = bcrypt.hashSync(tempPassword, 12);
-  db.prepare('INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 1)')
+const adminUser = db.prepare("SELECT * FROM users WHERE username = 'admin'").get();
+if (!adminUser) {
+  const defaultPassword = 'admin';
+  const hash = bcrypt.hashSync(defaultPassword, 12);
+  db.prepare('INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 0)')
     .run('admin', hash, 'admin');
   console.log('============================================================');
-  console.log(' First run: created local login "admin" (role: admin)');
-  console.log(' Temporary password: ' + tempPassword);
-  console.log(' You will be required to change it on first login.');
+  console.log(' Bootstrap: created local login "admin" (role: admin)');
+  console.log(' Default password: ' + defaultPassword);
   console.log('============================================================');
 }
 

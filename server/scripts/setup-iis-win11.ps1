@@ -154,7 +154,7 @@ function Configure-IisSite {
         Set-ItemProperty IIS:\Sites\$SiteName -Name physicalPath -Value $InstallPath
         Set-ItemProperty IIS:\Sites\$SiteName -Name applicationPool -Value $AppPoolName
 
-        $bindingInfo = "*:$IisPort:"
+        $bindingInfo = "*:${IisPort}:"
         $existingBindings = Get-WebBinding -Name $SiteName
         $hasPort = $false
         foreach ($binding in $existingBindings) {
@@ -207,4 +207,4 @@ Write-Host ""
 Write-Host "Deployment complete." -ForegroundColor Green
 Write-Host "IIS site: $SiteName"
 Write-Host "Path: $InstallPath"
-Write-Host "URL: http://localhost:$IisPort"
+Write-Host "URL: http://localhost:${IisPort}"
