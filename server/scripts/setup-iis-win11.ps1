@@ -149,7 +149,8 @@ function Install-IisModules {
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to install ARR. Please install it manually and re-run."
         }
-        Write-Step "ARR installed successfully."
+        Write-Step "ARR installed successfully. Restarting IIS service to register module..."
+        Restart-Service W3SVC -Force
     }
 }
 
@@ -159,7 +160,13 @@ function Configure-IisSite {
     Install-IisModules
 
     Write-Step "Enabling IIS reverse proxy"
-    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
+    try {
+        Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True' -ErrorAction Stop
+    }
+    catch {
+        Write-Host "Warning: Could not enable proxy via Set-WebConfigurationProperty. Ensure ARR is fully installed." -ForegroundColor Yellow
+        Write-Host $_.Exception.Message -ForegroundColor Gray
+    }
 
     if (-not (Test-Path IIS:\AppPools\$AppPoolName)) {
         New-WebAppPool -Name $AppPoolName | Out-Null
@@ -206,7 +213,19 @@ function Configure-IisSite {
 "@
     Set-Content -Path $webConfigPath -Value $webConfig -Encoding utf8
 
-    Start-Website -Name $SiteName
+    $site = Get-Website -Name $SiteName
+    if ($site.state -ne "Started") {
+        try {
+            Start-Website -Name $SiteName -ErrorAction Stop
+            Write-Step "IIS site '$SiteName' started."
+        }
+        catch {
+            Write-Host "Warning: Failed to start site '$SiteName'. Check if port $IisPort is in use by another site." -ForegroundColor Yellow
+            Write-Host $_.Exception.Message -ForegroundColor Gray
+        }
+    } else {
+        Write-Step "IIS site '$SiteName' is already running."
+    }
 }
 
 Assert-Admin
