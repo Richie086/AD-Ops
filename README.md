@@ -8,42 +8,76 @@ See `DOCUMENTATION.md` for full architecture and API details.
 
 ## Prerequisites
 
-- Node.js 18+
-- PowerShell installed on this host (assumed already present per your setup — either
-  Windows PowerShell or PowerShell 7/`pwsh`), with network reachability to
-  your domain controller(s) over WinRM (ports 5985/5986) and, for the
-  PS-remoting-configure feature, WMI/RPC (port 135 + dynamic range) to any
-  target computers.
-- A domain account with rights to run the AD/GroupPolicy cmdlets you intend
-  to use (domain admin, or a delegated account with equivalent read/exec rights).
-- This host does **not** need to be domain-joined. It reaches AD purely
-  through `Invoke-Command` against a domain controller you specify.
+- **Node.js 18+** (The setup script will attempt to install this via `winget` if missing).
+- **Git** (Required for the deployment sync).
+- **IIS (Internet Information Services)**: Required if deploying as a production web service on Windows.
+- **PowerShell 5.1 or 7+** with Administrator privileges.
+- Network reachability to your domain controller(s) over WinRM (ports 5985/5986).
 
-## Install
+## Deployment (Windows/IIS)
+
+The project includes PowerShell scripts to automate deployment on Windows 10/11 using IIS as a reverse proxy and a Scheduled Task for the Node.js background process.
+
+### Automated Setup
+
+1. Open PowerShell as **Administrator**.
+2. Navigate to the scripts directory:
+   ```powershell
+   cd server/scripts
+   ```
+3. Run the setup script:
+   ```powershell
+   .\setup-iis-win11.ps1
+   ```
+   *This script will:*
+   - Enable IIS and required Windows features.
+   - Install Node.js (via `winget`) if not found in PATH.
+   - Install **IIS URL Rewrite** and **Application Request Routing (ARR)** modules.
+   - Clone/Sync the repository to `C:\inetpub\AD-Ops`.
+   - Install all `npm` dependencies.
+   - Create a Scheduled Task (`AD-Ops-Node`) to run the backend on startup.
+   - Configure an IIS Site and Reverse Proxy on port 80.
+
+### Syncing Changes
+
+To update your production instance with the latest code from the repository:
+```powershell
+cd C:\inetpub\AD-Ops
+git pull
+npm install
+Restart-ScheduledTask -TaskName "AD-Ops-Node"
+```
+
+### Uninstallation
+
+To completely remove the IIS site, app pool, scheduled task, and (optionally) the files:
+```powershell
+cd server/scripts
+.\remove-iis-win11.ps1 -RemoveInstallPath
+```
+
+## Manual Installation (Development)
 
 ```bash
 cd ad-ops
 npm install
-```
-
-## Run
-
-```bash
 npm start
 ```
 
 Then open `http://localhost:3000`.
 
+## Authentication
+
 On first run, a default local login is created:
 
 ```
 username: admin
-password: <a random temporary password printed in the console>
+password: admin
 role: admin
 ```
 
-You'll be forced to set a new password on first login. This local account
-only gates access to the web UI — it has nothing to do with AD permissions.
+*(Note: Previous versions used a random password; it is now hardcoded to `admin` for initial setup. Change this immediately in the **Local Accounts** tab after logging in.)*
+
 
 ### Roles
 
