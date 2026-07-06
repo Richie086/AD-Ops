@@ -178,6 +178,7 @@ table.result-table tr:nth-child(even) { background: #fafbfd; }
 .status-true { color: #1a8a4a; font-weight: 600; }
 .status-false { color: var(--danger); font-weight: 600; }
 
+.error-banner {
 
   background: #fdeaea; color: var(--danger); border: 1px solid #f4c6c6;
   padding: .7rem 1rem; border-radius: 8px; margin-top: 1rem; font-size: .88rem;
