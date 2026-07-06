@@ -55,7 +55,8 @@ function Stop-NodePortProcess {
                 Stop-Process -Id $pid -Force -ErrorAction Stop
             }
             catch {
-                Write-Step "Could not stop PID $pid: $($_.Exception.Message)"
+                $err = $_.Exception.Message
+                Write-Step "Could not stop PID $pid : $err"
             }
         }
     }
