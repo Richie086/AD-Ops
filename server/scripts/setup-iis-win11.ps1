@@ -123,25 +123,43 @@ function Wait-NodePort {
     throw "Node app did not start on port $NodePort within timeout. Check scheduled task '$NodeTaskName'."
 }
 
-function Ensure-RewriteModule {
+function Install-IisModules {
+    Write-Step "Checking for required IIS modules (URL Rewrite and ARR)"
+    
+    Import-Module WebAdministration
+
+    # Check for URL Rewrite
     $rewriteModule = Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' }
     if (-not $rewriteModule) {
-        throw "IIS URL Rewrite module is required for reverse proxy. Install it from https://www.iis.net/downloads/microsoft/url-rewrite and re-run."
+        Write-Step "IIS URL Rewrite module not found. Attempting to install via winget..."
+        winget install Microsoft.IIS.URLRewrite --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install IIS URL Rewrite module. Please install it manually from https://www.iis.net/downloads/microsoft/url-rewrite"
+        }
+        Write-Step "URL Rewrite installed successfully."
+    }
+
+    # Check if we can access the proxy configuration (indicates ARR is present)
+    try {
+        Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Step "IIS Application Request Routing (ARR) not found. Attempting to install via winget..."
+        winget install Microsoft.IIS.ApplicationRequestRouting --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install ARR. Please install it manually and re-run."
+        }
+        Write-Step "ARR installed successfully."
     }
 }
 
 function Configure-IisSite {
     Write-Step "Configuring IIS site '$SiteName'"
 
-    Import-Module WebAdministration
-    Ensure-RewriteModule
+    Install-IisModules
 
-    try {
-        Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
-    }
-    catch {
-        throw "Failed to enable IIS reverse proxy. Install ARR (Application Request Routing) and re-run."
-    }
+    Write-Step "Enabling IIS reverse proxy"
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True'
 
     if (-not (Test-Path IIS:\AppPools\$AppPoolName)) {
         New-WebAppPool -Name $AppPoolName | Out-Null
