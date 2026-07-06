@@ -1,0 +1,19 @@
+{
+  "name": "ad-ops",
+  "version": "1.0.0",
+  "description": "Local web console for querying and managing Active Directory over WinRM, with markdown/text/xml/html reporting.",
+  "main": "server/app.js",
+  "scripts": {
+    "start": "node server/app.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0",
+    "uuid": "^9.0.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

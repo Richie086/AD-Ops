@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AD Ops</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN VIEW -->
+<div id="loginView" class="auth-screen">
+  <form id="loginForm" class="auth-card">
+    <h1>AD Ops</h1>
+    <p class="sub">Sign in to continue</p>
+    <label>Username</label>
+    <input type="text" id="loginUsername" autocomplete="username" required>
+    <label>Password</label>
+    <input type="password" id="loginPassword" autocomplete="current-password" required>
+    <div id="loginError" class="error-msg"></div>
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+
+<!-- CHANGE PASSWORD VIEW -->
+<div id="changePwView" class="auth-screen hidden">
+  <form id="changePwForm" class="auth-card">
+    <h1>Set a new password</h1>
+    <p class="sub">This account is using a temporary password. Choose a new one.</p>
+    <label>Current password</label>
+    <input type="password" id="cpCurrent" required>
+    <label>New password (min 8 characters)</label>
+    <input type="password" id="cpNew" minlength="8" required>
+    <div id="cpError" class="error-msg"></div>
+    <button type="submit">Update password</button>
+  </form>
+</div>
+
+<!-- MAIN APP -->
+<div id="appView" class="app-shell hidden">
+  <header class="topbar">
+    <button id="navToggle" class="icon-btn" aria-label="Menu">☰</button>
+    <div class="brand">AD Ops</div>
+    <div class="domain-bar">
+      <select id="domainSelect"><option value="">— Select saved domain —</option></select>
+      <button id="connectBtn" class="btn-secondary">Connect</button>
+      <span id="connStatus" class="conn-status">Not connected</span>
+    </div>
+    <span id="userBadge" class="user-badge"></span>
+    <button id="logoutBtn" class="icon-btn" title="Log out">⏻</button>
+  </header>
+
+  <div class="body-layout">
+    <nav id="sideNav" class="sidenav">
+      <button class="nav-item active" data-view="users">Users</button>
+      <button class="nav-item" data-view="groups">Groups</button>
+      <button class="nav-item" data-view="computers">Computers</button>
+      <button class="nav-item" data-view="membership">Group Membership</button>
+      <button class="nav-item" data-view="nested">Nested Membership</button>
+      <button class="nav-item" data-view="principalGroups">User's Groups</button>
+      <button class="nav-item" data-view="gpo">Group Policy</button>
+      <button class="nav-item role-gated" data-min-role="operator" data-view="deploy">Deploy Script</button>
+      <button class="nav-item role-gated" data-min-role="operator" data-view="remoting">PS Remoting</button>
+      <button class="nav-item" data-view="domains">Saved Domains</button>
+      <button class="nav-item" data-view="history">History</button>
+      <button class="nav-item role-gated" data-min-role="admin" data-view="localUsers">Local Accounts</button>
+    </nav>
+
+    <main class="content">
+
+      <section class="view" id="view-users">
+        <h2>Query Users</h2>
+        <form class="query-form" data-endpoint="/api/ad/users" data-body="query">
+          <input type="text" name="query" placeholder="Name or SamAccountName (wildcards ok, blank = all)">
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-groups">
+        <h2>Query Groups</h2>
+        <form class="query-form" data-endpoint="/api/ad/groups" data-body="query">
+          <input type="text" name="query" placeholder="Group name (wildcards ok, blank = all)">
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-computers">
+        <h2>Query Computers</h2>
+        <form class="query-form" data-endpoint="/api/ad/computers" data-body="query">
+          <input type="text" name="query" placeholder="Computer name (wildcards ok, blank = all)">
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-membership">
+        <h2>Group Membership (direct)</h2>
+        <form class="query-form" data-endpoint="/api/ad/membership" data-body="groupName">
+          <input type="text" name="groupName" placeholder="Group name" required>
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-nested">
+        <h2>Nested Group Membership</h2>
+        <form class="query-form" data-endpoint="/api/ad/nested-membership" data-body="groupName">
+          <input type="text" name="groupName" placeholder="Group name" required>
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-principalGroups">
+        <h2>Groups a User or Computer Belongs To</h2>
+        <form class="query-form" data-endpoint="/api/ad/principal-groups" data-body="principal">
+          <input type="text" name="principal" placeholder="SamAccountName" required>
+          <button type="submit">Run Query</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-gpo">
+        <h2>Group Policy Objects</h2>
+        <form class="query-form" data-endpoint="/api/ad/gpo">
+          <button type="submit">List All GPOs</button>
+        </form>
+        <h3>GPO Report (XML)</h3>
+        <form class="query-form" data-endpoint="/api/ad/gpo-report" data-body="gpoName">
+          <input type="text" name="gpoName" placeholder="Exact GPO display name" required>
+          <button type="submit">Get Report</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-deploy">
+        <h2>Deploy / Run PowerShell Script</h2>
+        <form class="query-form" id="deployForm">
+          <input type="text" id="deployTargets" placeholder="Target computer(s), comma-separated" required>
+          <textarea id="deployScript" rows="10" placeholder="PowerShell script body to run on each target..." required></textarea>
+          <button type="submit">Deploy &amp; Run</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-remoting">
+        <h2>Configure PowerShell Remoting</h2>
+        <form class="query-form" id="remotingForm">
+          <input type="text" id="remotingTarget" placeholder="Target computer name" required>
+          <select id="remotingAction">
+            <option value="status">Check status</option>
+            <option value="enable">Enable</option>
+            <option value="disable">Disable</option>
+          </select>
+          <button type="submit">Run</button>
+        </form>
+      </section>
+
+      <section class="view hidden" id="view-domains">
+        <h2>Saved Domains</h2>
+        <form class="query-form role-gated" data-min-role="operator" id="addDomainForm">
+          <input type="text" id="newDomainLabel" placeholder="Label (e.g. CONTOSO Prod)" required>
+          <input type="text" id="newDomainHost" placeholder="DC hostname or IP" required>
+          <input type="text" id="newDomainNotes" placeholder="Notes (optional)">
+          <button type="submit">Save Domain</button>
+        </form>
+        <div id="domainsList" class="domains-list"></div>
+      </section>
+
+      <section class="view hidden" id="view-history">
+        <h2>Job / Query History</h2>
+        <p class="view-sub">Everything you've run, with results you can reopen without re-running the query.</p>
+        <label id="historyAllToggleWrap" class="hidden" style="display:flex;align-items:center;gap:.4rem;margin-bottom:.75rem;font-size:.85rem;color:var(--muted);">
+          <input type="checkbox" id="historyAllToggle"> Show all users' history (admin)
+        </label>
+        <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section class="view hidden" id="view-localUsers">
+        <h2>Local Accounts</h2>
+        <p class="view-sub">Manage who can log into AD Ops and what they're allowed to do. Roles: <strong>viewer</strong> (read-only queries), <strong>operator</strong> (+ deploy scripts, configure remoting, manage saved domains), <strong>admin</strong> (+ manage local accounts).</p>
+        <form class="query-form" id="addLocalUserForm">
+          <input type="text" id="newLocalUsername" placeholder="Username" required>
+          <select id="newLocalRole">
+            <option value="viewer">viewer</option>
+            <option value="operator" selected>operator</option>
+            <option value="admin">admin</option>
+          </select>
+          <button type="submit">Create Account</button>
+        </form>
+        <div id="localUsersList" class="domains-list"></div>
+      </section>
+
+      <div id="resultsArea" class="results-area hidden">
+        <div class="results-header">
+          <h3>Results</h3>
+          <div class="export-buttons">
+            <button data-fmt="md">Export .md</button>
+            <button data-fmt="txt">Export .txt</button>
+            <button data-fmt="xml">Export .xml</button>
+            <button data-fmt="html">Export .html</button>
+          </div>
+        </div>
+        <div id="resultsTableWrap" class="table-wrap"></div>
+
+        <details id="rawDetails" open>
+          <summary>Raw command output</summary>
+          <div class="raw-command" id="rawCommand"></div>
+          <pre id="rawOutput" class="raw-output"></pre>
+        </details>
+      </div>
+
+      <div id="errorBanner" class="error-banner hidden"></div>
+    </main>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
