@@ -86,3 +86,35 @@ Environment variables (optional):
   in transit otherwise.
 - The SQLite database lives at `data/adops.db` and holds local accounts,
   saved domain labels/hostnames, and an audit log — never domain credentials.
+
+## Windows IIS Deployment Scripts
+
+The repository includes Windows 11 helper scripts for IIS-based deployment and cleanup:
+
+- `server/scripts/setup-iis-win11.ps1`: Enables IIS features, clones/updates this repo,
+  installs Node dependencies, creates a startup scheduled task for `npm start`, waits for
+  the Node listener, and configures IIS reverse proxy rules to `localhost:<NodePort>`.
+- `server/scripts/remove-iis-win11.ps1`: Removes the scheduled task, stops listeners on
+  the configured Node port, removes IIS site/app pool, and optionally removes the install
+  directory.
+
+Example setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\server\scripts\setup-iis-win11.ps1 -IisPort 80 -NodePort 3000
+```
+
+Example teardown:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\server\scripts\remove-iis-win11.ps1 -RemoveInstallPath
+```
+
+## Documentation Upkeep
+
+When repository behavior changes, update this README in the same PR/commit. Minimum checklist:
+
+- Update prerequisites when runtime or OS assumptions change.
+- Update configuration variables and default values.
+- Update script usage examples when script parameters or behavior change.
+- Add a short note for new endpoints, major features, or operational workflows.
