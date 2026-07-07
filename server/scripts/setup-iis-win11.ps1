@@ -24,6 +24,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ensure-windows-powershell.ps1')
+Ensure-WindowsPowerShell -ScriptBoundParameters $PSBoundParameters
+
 function Write-Step {
     param([string]$Message)
     Write-Host "[setup] $Message" -ForegroundColor Cyan
@@ -45,20 +48,9 @@ function Require-Command {
 }
 
 function Import-IisAdministration {
-    if (Get-Module WebAdministration) {
-        # PS 7 loads this module in a WinPSCompat remoting session by default,
-        # which does not expose the IIS: configuration drive.
-        if (Get-PSDrive -Name IIS -ErrorAction SilentlyContinue) {
-            return
-        }
-        Remove-Module WebAdministration -Force -ErrorAction SilentlyContinue
+    if (-not (Get-Module WebAdministration)) {
+        Import-Module WebAdministration -ErrorAction Stop
     }
-
-    $importParams = @{ Name = 'WebAdministration'; ErrorAction = 'Stop' }
-    if ($PSVersionTable.PSVersion.Major -ge 6) {
-        $importParams['SkipEditionCheck'] = $true
-    }
-    Import-Module @importParams
 }
 
 function Test-IisSite {

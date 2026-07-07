@@ -25,6 +25,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'ensure-windows-powershell.ps1')
+Ensure-WindowsPowerShell -ScriptBoundParameters $PSBoundParameters
+
 function Write-Step {
     param([string]$Message)
     Write-Host "[rebind] $Message" -ForegroundColor Cyan
@@ -60,18 +63,7 @@ function Show-RebindDiagnostics {
         [int]$NodePort
     )
 
-    if (Get-Module WebAdministration) {
-        if (-not (Get-PSDrive -Name IIS -ErrorAction SilentlyContinue)) {
-            Remove-Module WebAdministration -Force -ErrorAction SilentlyContinue
-        }
-    }
-    if (-not (Get-Module WebAdministration)) {
-        $importParams = @{ Name = 'WebAdministration'; ErrorAction = 'SilentlyContinue' }
-        if ($PSVersionTable.PSVersion.Major -ge 6) {
-            $importParams['SkipEditionCheck'] = $true
-        }
-        Import-Module @importParams
-    }
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
 
     Write-Host ""
     Write-Host "Diagnostics:" -ForegroundColor Yellow
