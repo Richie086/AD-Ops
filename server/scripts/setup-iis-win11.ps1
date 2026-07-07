@@ -44,6 +44,67 @@ function Require-Command {
     }
 }
 
+function Import-IisAdministration {
+    if (Get-Module WebAdministration) {
+        # PS 7 loads this module in a WinPSCompat remoting session by default,
+        # which does not expose the IIS: configuration drive.
+        if (Get-PSDrive -Name IIS -ErrorAction SilentlyContinue) {
+            return
+        }
+        Remove-Module WebAdministration -Force -ErrorAction SilentlyContinue
+    }
+
+    $importParams = @{ Name = 'WebAdministration'; ErrorAction = 'Stop' }
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $importParams['SkipEditionCheck'] = $true
+    }
+    Import-Module @importParams
+}
+
+function Test-IisSite {
+    param([string]$Name)
+    return $null -ne (Get-Website -Name $Name -ErrorAction SilentlyContinue)
+}
+
+function Test-IisAppPool {
+    param([string]$Name)
+    return $null -ne (Get-WebAppPool -Name $Name -ErrorAction SilentlyContinue)
+}
+
+function Ensure-IisAppPool {
+    param([string]$Name)
+
+    Import-IisAdministration
+
+    if (-not (Test-IisAppPool -Name $Name)) {
+        New-WebAppPool -Name $Name | Out-Null
+    }
+
+    if (Get-PSDrive -Name IIS -ErrorAction SilentlyContinue) {
+        Set-ItemProperty "IIS:\AppPools\$Name" -Name managedRuntimeVersion -Value ''
+        Set-ItemProperty "IIS:\AppPools\$Name" -Name managedPipelineMode -Value 'Integrated'
+        return
+    }
+
+    $appcmd = Join-Path $env:windir 'system32\inetsrv\appcmd.exe'
+    & $appcmd set apppool "$Name" /managedRuntimeVersion:"" | Out-Null
+    & $appcmd set apppool "$Name" /managedPipelineMode:Integrated | Out-Null
+}
+
+function Set-IisSiteProperties {
+    param(
+        [string]$SiteName,
+        [string]$PhysicalPath,
+        [string]$ApplicationPool
+    )
+
+    Import-IisAdministration
+
+    if (Test-IisSite -Name $SiteName) {
+        Set-Website -Name $SiteName -PhysicalPath $PhysicalPath -ApplicationPool $ApplicationPool | Out-Null
+    }
+}
+
 function Enable-Iis {
     Write-Step "Enabling IIS optional Windows features"
 
@@ -172,7 +233,7 @@ function Get-SiteBoundToHttpPort {
         [string]$ExcludeSiteName
     )
 
-    Import-Module WebAdministration
+    Import-IisAdministration
 
     foreach ($site in Get-Website) {
         if ($site.Name -eq $ExcludeSiteName) {
@@ -201,7 +262,7 @@ function Resolve-HttpPortConflict {
         [switch]$AllowDefaultWebSiteTakeover
     )
 
-    Import-Module WebAdministration
+    Import-IisAdministration
 
     $conflictingSite = Get-SiteBoundToHttpPort -Port $Port -ExcludeSiteName $TargetSiteName
     if (-not $conflictingSite) {
@@ -238,12 +299,12 @@ function Set-IisHttpBinding {
         [switch]$AllowDefaultWebSiteTakeover
     )
 
-    Import-Module WebAdministration
+    Import-IisAdministration
 
     $bindingInfo = "*:${Port}:"
     Resolve-HttpPortConflict -Port $Port -TargetSiteName $SiteName -AllowDefaultWebSiteTakeover:$AllowDefaultWebSiteTakeover
 
-    if (Test-Path "IIS:\Sites\$SiteName") {
+    if (Test-IisSite -Name $SiteName) {
         $httpBindings = @(Get-WebBinding -Name $SiteName | Where-Object { $_.protocol -eq 'http' })
         foreach ($binding in $httpBindings) {
             if ($binding.bindingInformation -ne $bindingInfo) {
@@ -269,7 +330,7 @@ function Set-IisHttpBinding {
 function Install-IisModules {
     Write-Step "Checking for required IIS modules (URL Rewrite and ARR)"
     
-    Import-Module WebAdministration
+    Import-IisAdministration
 
     # Check for URL Rewrite
     $rewriteModule = Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' }
@@ -311,17 +372,8 @@ function Configure-IisSite {
         Write-Host $_.Exception.Message -ForegroundColor Gray
     }
 
-    if (-not (Test-Path IIS:\AppPools\$AppPoolName)) {
-        New-WebAppPool -Name $AppPoolName | Out-Null
-    }
-
-    Set-ItemProperty IIS:\AppPools\$AppPoolName -Name managedRuntimeVersion -Value ''
-    Set-ItemProperty IIS:\AppPools\$AppPoolName -Name managedPipelineMode -Value 'Integrated'
-
-    if (Test-Path IIS:\Sites\$SiteName) {
-        Set-ItemProperty IIS:\Sites\$SiteName -Name physicalPath -Value $InstallPath
-        Set-ItemProperty IIS:\Sites\$SiteName -Name applicationPool -Value $AppPoolName
-    }
+    Ensure-IisAppPool -Name $AppPoolName
+    Set-IisSiteProperties -SiteName $SiteName -PhysicalPath $InstallPath -ApplicationPool $AppPoolName
 
     Set-IisHttpBinding -SiteName $SiteName -Port $IisPort -AllowDefaultWebSiteTakeover:$AllowDefaultWebSiteTakeover
 
