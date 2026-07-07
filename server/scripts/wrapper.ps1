@@ -20,7 +20,16 @@ $ProgressPreference = 'SilentlyContinue'
 
 function Write-JsonResult {
     param([object]$Payload)
-    $json = if ($null -eq $Payload) { '[]' } else { $Payload | ConvertTo-Json -Depth 8 -Compress -EnumerateCollection }
+    if ($null -eq $Payload) {
+        $json = '[]'
+    } else {
+        $params = @{ InputObject = $Payload; Depth = 8; Compress = $true }
+        # -EnumerateCollection exists in PowerShell 6+ only (not Windows PS 5.1).
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $params.EnumerateCollection = $true
+        }
+        $json = ConvertTo-Json @params
+    }
     Write-Output ("===JSON===`n" + $json)
 }
 
