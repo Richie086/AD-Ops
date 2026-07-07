@@ -6,6 +6,30 @@ const { getMinPasswordLength } = require('../settings');
 
 const router = express.Router();
 
+function finishLogin(req, res, row) {
+  req.session.regenerate((regenErr) => {
+    if (regenErr) {
+      console.error('Session regenerate failed:', regenErr);
+      return res.status(500).json({ error: 'Could not start session. Try again or restart the server.' });
+    }
+    req.session.userId = row.id;
+    req.session.username = row.username;
+    req.session.role = row.role;
+    logAudit(row.username, null, 'login', null);
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('Session save failed:', saveErr);
+        return res.status(500).json({ error: 'Could not save session. Check that the server can write to its data directory.' });
+      }
+      res.json({
+        username: row.username,
+        role: row.role,
+        mustChangePassword: !!row.must_change_password,
+      });
+    });
+  });
+}
+
 router.post('/login', (req, res) => {
   try {
     const { username, password } = req.body || {};
@@ -13,21 +37,12 @@ router.post('/login', (req, res) => {
     const pass = String(password || '');
     if (!user || !pass) return res.status(400).json({ error: 'Username and password required' });
 
-    const row = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(user);
+    const row = db.prepare('SELECT * FROM users WHERE lower(username) = lower(?)').get(user);
     if (!row || !bcrypt.compareSync(pass, row.password_hash)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    req.session.userId = row.id;
-    req.session.username = row.username;
-    req.session.role = row.role;
-    logAudit(row.username, null, 'login', null);
-
-    res.json({
-      username: row.username,
-      role: row.role,
-      mustChangePassword: !!row.must_change_password,
-    });
+    finishLogin(req, res, row);
   } catch (err) {
     console.error('Login failed:', err);
     res.status(500).json({ error: 'Login failed due to a server error. Check server logs.' });

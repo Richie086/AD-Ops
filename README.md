@@ -125,8 +125,11 @@ On the **Windows server** (PowerShell as Administrator):
 cd C:\inetpub\AD-Ops
 git pull
 npm install
+.\server\scripts\diagnose-login.ps1
 .\server\scripts\reset-local-admin.ps1 -Password admin
 ```
+
+`diagnose-login.ps1` tests Node, IIS, login API, and resets the admin password if needed.
 
 Or without the wrapper script:
 

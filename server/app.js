@@ -19,6 +19,7 @@ const usersRoutes = require('./routes/users');
 const settingsRoutes = require('./routes/settings');
 const adminRoutes = require('./routes/admin');
 const { getSettings } = require('./settings');
+const { db } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -53,6 +54,7 @@ app.use(
       httpOnly: true,
       sameSite: 'lax',
       secure: false,
+      path: '/',
       maxAge: 8 * 60 * 60 * 1000, // 8 hours
     },
   })
@@ -60,7 +62,19 @@ app.use(
 
 app.use('/api/auth', authRoutes);
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, time: new Date().toISOString() });
+  try {
+    const userCount = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+    const adminExists = !!db.prepare("SELECT 1 AS ok FROM users WHERE lower(username) = 'admin'").get();
+    res.json({
+      ok: true,
+      time: new Date().toISOString(),
+      userCount,
+      adminExists,
+      dataDir: DATA_DIR,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 app.use('/api/settings', settingsRoutes);
 app.use('/api/domains', requireLogin, domainsRoutes); // per-route role checks inside (viewer can GET/connect; operator+ can add/delete)

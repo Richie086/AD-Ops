@@ -76,7 +76,15 @@ function applyRuntimeSettings(settings) {
 function getSettings() {
   if (cached) return cached;
   const row = db.prepare('SELECT value_json FROM app_settings WHERE key = ?').get('main');
-  cached = sanitizeSettings(row ? JSON.parse(row.value_json) : null);
+  let parsed = null;
+  if (row?.value_json) {
+    try {
+      parsed = JSON.parse(row.value_json);
+    } catch {
+      console.warn('Invalid app_settings JSON; using defaults.');
+    }
+  }
+  cached = sanitizeSettings(parsed);
   applyRuntimeSettings(cached);
   return cached;
 }

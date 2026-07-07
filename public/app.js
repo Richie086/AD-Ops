@@ -8,6 +8,7 @@
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
       const err = new Error(body.error || `Request failed (${res.status})`);
+      err.status = res.status;
       err.raw = body.raw;
       err.command = body.command;
       throw err;
@@ -104,7 +105,15 @@
         await enterApp(result);
       }
     } catch (err) {
-      $('#loginError').textContent = err.message;
+      let msg = err.message;
+      if (err.status === 401) {
+        msg += ' If this is a fresh install, run reset-local-admin.ps1 on the server (see README).';
+      } else if (err.status === 502 || err.status === 503) {
+        msg += ' The Node backend may not be running — check the AD-Ops-Node scheduled task.';
+      } else if (err.status >= 500) {
+        msg += ' Check server logs on the AD-Ops host.';
+      }
+      $('#loginError').textContent = msg;
       loginView.classList.remove('hidden');
       changePwView.classList.add('hidden');
       appView.classList.add('hidden');
@@ -203,9 +212,8 @@
         }
       }
     } catch (err) {
-      loginView.classList.remove('hidden');
-      appView.classList.add('hidden');
-      throw err;
+      console.error('Post-login setup failed:', err);
+      showError(err);
     }
   }
 
