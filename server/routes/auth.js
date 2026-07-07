@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { db, logAudit } = require('../db');
 const { clearCreds } = require('../credCache');
+const { getMinPasswordLength } = require('../settings');
 
 const router = express.Router();
 
@@ -41,8 +42,9 @@ router.get('/me', (req, res) => {
 router.post('/change-password', (req, res) => {
   if (!req.session.userId) return res.status(401).json({ error: 'Not authenticated' });
   const { currentPassword, newPassword } = req.body || {};
-  if (!newPassword || newPassword.length < 8) {
-    return res.status(400).json({ error: 'New password must be at least 8 characters' });
+  const minLen = getMinPasswordLength();
+  if (!newPassword || newPassword.length < minLen) {
+    return res.status(400).json({ error: `New password must be at least ${minLen} characters` });
   }
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
   if (!bcrypt.compareSync(currentPassword || '', user.password_hash)) {

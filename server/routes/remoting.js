@@ -2,6 +2,7 @@ const express = require('express');
 const { db, logAudit, recordHistory } = require('../db');
 const { runRemote } = require('../psRunner');
 const { requireDomainSession } = require('./domains');
+const { requireFeature } = require('../settings');
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ function getDomain(id) {
 // Uses WMI/DCOM (port 135 + dynamic RPC), not WinRM, to reach the target —
 // so this works even on machines where PS remoting isn't enabled yet.
 // The call is relayed via the domain controller we're already connected to.
-router.post('/configure', async (req, res) => {
+router.post('/configure', requireFeature('psRemoting'), async (req, res) => {
   const { domainId, target, action } = req.body || {};
   if (!domainId || !target || !['enable', 'disable', 'status'].includes(action)) {
     return res.status(400).json({ error: 'domainId, target, and action (enable|disable|status) are required' });
@@ -53,7 +54,7 @@ router.post('/configure', async (req, res) => {
     ? [target, creds.username, creds.password]
     : [target, creds.username, creds.password, remoteCmd];
 
-  const result = await runRemote(domain.dc_host, creds.username, creds.password, script, args);
+  const result = await runRemote(domain.dc_host, creds.username, creds.password, script, args, { useSsl: !!domain.use_ssl });
   logAudit(req.session.username, domain.label, 'ps_remoting_' + action, target);
 
   const title = `PS Remoting: ${action} (${target})`;

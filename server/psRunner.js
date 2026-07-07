@@ -83,17 +83,20 @@ function invokeWrapper(payload, commandForDisplay) {
  * @param {any[]} args - positional arguments passed into the scriptblock
  * @returns {Promise<{ok: boolean, data: any, raw: string, command: string, error?: string}>}
  */
-function runRemote(dcHost, username, password, scriptBody, args = []) {
+function runRemote(dcHost, username, password, scriptBody, args = [], options = {}) {
+  const useSsl = !!options.useSsl;
   const payload = JSON.stringify({
     DC: dcHost,
     User: username,
     Pass: password,
     Script: scriptBody,
     Args: args,
+    UseSSL: useSsl,
   });
 
+  const transport = useSsl ? ' -UseSSL -Port 5986' : '';
   const commandForDisplay =
-    `Invoke-Command -ComputerName ${dcHost} -Credential ${username} -ScriptBlock { ${scriptBody} }` +
+    `Invoke-Command -ComputerName ${dcHost}${transport} -Credential ${username} -ScriptBlock { ${scriptBody} }` +
     (args.length ? ` -ArgumentList ${JSON.stringify(args)}` : '');
 
   return invokeWrapper(payload, commandForDisplay);
@@ -111,17 +114,20 @@ function runRemote(dcHost, username, password, scriptBody, args = []) {
  * @param {string} scriptBody
  * @returns {Promise<{ok: boolean, data: {Target:string, Success:boolean, Output:string|null, Error:string|null}[], raw: string, command: string}>}
  */
-function runPerTarget(targets, username, password, scriptBody) {
+function runPerTarget(targets, username, password, scriptBody, options = {}) {
+  const useSsl = !!options.useSsl;
   const payload = JSON.stringify({
     Mode: 'perTarget',
     Targets: targets,
     User: username,
     Pass: password,
     Script: scriptBody,
+    UseSSL: useSsl,
   });
 
+  const transport = useSsl ? ' -UseSSL -Port 5986' : '';
   const commandForDisplay =
-    `foreach ($t in ${JSON.stringify(targets)}) { Invoke-Command -ComputerName $t -Credential ${username} -ScriptBlock { ${scriptBody} } }`;
+    `foreach ($t in ${JSON.stringify(targets)}) { Invoke-Command -ComputerName $t${transport} -Credential ${username} -ScriptBlock { ${scriptBody} } }`;
 
   return invokeWrapper(payload, commandForDisplay);
 }

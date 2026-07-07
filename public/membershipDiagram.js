@@ -8,35 +8,10 @@
       .replace(/;/g, ',');
   }
 
-  function mermaidId(prefix, value) {
-    let hash = 0;
-    const text = String(value);
-    for (let i = 0; i < text.length; i += 1) {
-      hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-    }
-    const safe = text.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 28);
-    return `n_${prefix}_${safe}_${Math.abs(hash)}`;
-  }
-
   function memberLabel(row) {
     const name = row.Name || row.SamAccountName || row.DisplayName || 'member';
     const cls = row.objectClass || row.ObjectClass || 'object';
     return `${name} (${cls})`;
-  }
-
-  function nodeDecl(id, label, objectClass, isRoot) {
-    const esc = escapeMermaidLabel(label);
-    if (isRoot) return `${id}[["${esc}"]]`;
-    switch (objectClass) {
-      case 'user':
-        return `${id}("${esc}")`;
-      case 'group':
-        return `${id}[("${esc}")]`;
-      case 'computer':
-        return `${id}{{"${esc}"}}`;
-      default:
-        return `${id}["${esc}"]`;
-    }
   }
 
   function inferRootGroup(rows, meta) {
@@ -87,69 +62,45 @@
 
   function toMermaid(ctx) {
     const { rows, rootGroup, nested } = ctx;
-    const lines = ['flowchart TD'];
-    const declared = new Set();
-    const edges = new Set();
-    const groupNameToId = new Map();
+    const childMap = new Map();
 
-    const rootId = mermaidId('root', rootGroup);
-    lines.push(`  ${nodeDecl(rootId, rootGroup, 'group', true)}`);
-    declared.add(rootId);
-    groupNameToId.set(rootGroup, rootId);
-
-    function ensureGroupNode(name) {
-      if (groupNameToId.has(name)) return groupNameToId.get(name);
-      const id = mermaidId('group', name);
-      if (!declared.has(id)) {
-        lines.push(`  ${nodeDecl(id, name, 'group', false)}`);
-        declared.add(id);
-      }
-      groupNameToId.set(name, id);
-      return id;
-    }
-
-    function addEdge(fromId, toId) {
-      const key = `${fromId}-->${toId}`;
-      if (edges.has(key)) return;
-      edges.add(key);
-      lines.push(`  ${fromId} --> ${toId}`);
+    function addChild(parent, item) {
+      if (!childMap.has(parent)) childMap.set(parent, []);
+      childMap.get(parent).push(item);
     }
 
     rows.forEach((row) => {
-      const key = row.DistinguishedName || row.SamAccountName || row.Name;
-      if (!key) return;
-
-      const nodeId = mermaidId('member', key);
       const label = memberLabel(row);
-      const objectClass = row.objectClass || row.ObjectClass || 'object';
-
-      if (!declared.has(nodeId)) {
-        lines.push(`  ${nodeDecl(nodeId, label, objectClass, false)}`);
-        declared.add(nodeId);
-      }
-
-      if (objectClass === 'group') {
-        groupNameToId.set(row.Name || row.SamAccountName, nodeId);
-      }
+      const nameKey = row.objectClass === 'group' ? (row.Name || row.SamAccountName) : null;
+      const item = { label, nameKey };
 
       if (!nested || row.Depth === 1) {
-        addEdge(rootId, nodeId);
+        addChild(rootGroup, item);
         return;
       }
 
       if (row.ViaGroup) {
-        const parts = row.ViaGroup.split('>').map((part) => part.trim()).filter(Boolean);
-        const parentName = parts[parts.length - 1] || rootGroup;
-        const parentId = ensureGroupNode(parentName);
-        addEdge(parentId, nodeId);
+        const parent = row.ViaGroup.split('>').map((part) => part.trim()).filter(Boolean).pop();
+        addChild(parent || rootGroup, item);
         return;
       }
 
-      addEdge(rootId, nodeId);
+      addChild(rootGroup, item);
     });
 
-    lines.push('  classDef rootNode fill:#2d3250,color:#fff,stroke:#1b1f3a,stroke-width:2px');
-    lines.push(`  class ${rootId} rootNode`);
+    const lines = ['mindmap', `  root((${escapeMermaidLabel(rootGroup)}))`];
+
+    function emitChildren(parentKey, depth) {
+      const kids = childMap.get(parentKey) || [];
+      kids.forEach((kid) => {
+        lines.push(`${' '.repeat(2 + depth * 2)}${escapeMermaidLabel(kid.label)}`);
+        if (kid.nameKey && childMap.has(kid.nameKey)) {
+          emitChildren(kid.nameKey, depth + 1);
+        }
+      });
+    }
+
+    emitChildren(rootGroup, 0);
     return lines.join('\n');
   }
 

@@ -20,8 +20,8 @@
 <!-- LOGIN VIEW -->
 <div id="loginView" class="auth-screen">
   <form id="loginForm" class="auth-card">
-    <h1>AD Ops</h1>
-    <p class="sub">Sign in to continue</p>
+    <h1 id="loginAppTitle">AD Ops</h1>
+    <p class="sub" id="loginTagline">Sign in to continue</p>
     <label>Username</label>
     <input type="text" id="loginUsername" autocomplete="username" required>
     <label>Password</label>
@@ -49,7 +49,7 @@
 <div id="appView" class="app-shell hidden">
   <header class="topbar">
     <button id="navToggle" class="icon-btn" aria-label="Menu">☰</button>
-    <div class="brand">AD Ops</div>
+    <div class="brand" id="appBrand">AD Ops</div>
     <div class="domain-bar">
       <select id="domainSelect"><option value="">— Select saved domain —</option></select>
       <button id="connectBtn" class="btn-secondary">Connect</button>
@@ -66,14 +66,16 @@
       <button class="nav-item" data-view="groups">Groups</button>
       <button class="nav-item" data-view="computers">Computers</button>
       <button class="nav-item" data-view="membership">Group Membership</button>
+      <button class="nav-item" data-view="groupCompare" data-feature="groupCompare">Compare Groups</button>
       <button class="nav-item" data-view="nested">Nested Membership</button>
       <button class="nav-item" data-view="principalGroups">User's Groups</button>
       <button class="nav-item" data-view="gpo">Group Policy</button>
-      <button class="nav-item" data-view="ouTree">OU Structure</button>
-      <button class="nav-item role-gated" data-min-role="operator" data-view="deploy">Deploy Script</button>
-      <button class="nav-item role-gated" data-min-role="operator" data-view="remoting">PS Remoting</button>
+      <button class="nav-item" data-view="ouTree" data-feature="ouTree">OU Structure</button>
+      <button class="nav-item role-gated" data-min-role="operator" data-view="deploy" data-feature="scriptDeploy">Deploy Script</button>
+      <button class="nav-item role-gated" data-min-role="operator" data-view="remoting" data-feature="psRemoting">PS Remoting</button>
       <button class="nav-item" data-view="domains">Saved Domains</button>
       <button class="nav-item" data-view="history">History</button>
+      <button class="nav-item role-gated" data-min-role="admin" data-view="adminPanel">Admin Panel</button>
       <button class="nav-item role-gated" data-min-role="admin" data-view="localUsers">Local Accounts</button>
     </nav>
 
@@ -111,6 +113,20 @@
         </form>
       </section>
 
+      <section class="view hidden" id="view-groupCompare" data-feature="groupCompare">
+        <h2>Compare Group Membership</h2>
+        <p class="view-sub">Diff two groups to see members only in the first group, only in the second, or in both.</p>
+        <form class="query-form" id="groupCompareForm">
+          <input type="text" id="compareGroupA" name="groupA" placeholder="First group name" required>
+          <input type="text" id="compareGroupB" name="groupB" placeholder="Second group name" required>
+          <label class="checkbox-row inline-check">
+            <input type="checkbox" id="compareIncludeNested">
+            Include nested membership (recursive)
+          </label>
+          <button type="submit">Compare Groups</button>
+        </form>
+      </section>
+
       <section class="view hidden" id="view-nested">
         <h2>Nested Group Membership</h2>
         <form class="query-form" data-endpoint="/api/ad/nested-membership" data-body="groupName">
@@ -132,14 +148,14 @@
         <form class="query-form" data-endpoint="/api/ad/gpo">
           <button type="submit">List All GPOs</button>
         </form>
-        <h3>GPO Report (XML)</h3>
-        <form class="query-form" data-endpoint="/api/ad/gpo-report" data-body="gpoName">
+        <h3 data-feature="gpoReports">GPO Report (XML)</h3>
+        <form class="query-form" data-endpoint="/api/ad/gpo-report" data-body="gpoName" data-feature="gpoReports">
           <input type="text" name="gpoName" placeholder="Exact GPO display name" required>
           <button type="submit">Get Report</button>
         </form>
       </section>
 
-      <section class="view hidden" id="view-ouTree">
+      <section class="view hidden" id="view-ouTree" data-feature="ouTree">
         <h2>Organizational Unit Structure</h2>
         <p class="view-sub">Browse the AD OU hierarchy and view it as a Mermaid diagram.</p>
         <form class="query-form" data-endpoint="/api/ad/ou-tree" data-body="root">
@@ -148,7 +164,7 @@
         </form>
       </section>
 
-      <section class="view hidden" id="view-deploy">
+      <section class="view hidden" id="view-deploy" data-feature="scriptDeploy">
         <h2>Deploy / Run PowerShell Script</h2>
         <form class="query-form" id="deployForm">
           <input type="text" id="deployTargets" placeholder="Target computer(s), comma-separated" required>
@@ -157,7 +173,7 @@
         </form>
       </section>
 
-      <section class="view hidden" id="view-remoting">
+      <section class="view hidden" id="view-remoting" data-feature="psRemoting">
         <h2>Configure PowerShell Remoting</h2>
         <form class="query-form" id="remotingForm">
           <input type="text" id="remotingTarget" placeholder="Target computer name" required>
@@ -175,6 +191,10 @@
         <form class="query-form role-gated" data-min-role="operator" id="addDomainForm">
           <input type="text" id="newDomainLabel" placeholder="Label (e.g. CONTOSO Prod)" required>
           <input type="text" id="newDomainHost" placeholder="DC hostname or IP" required>
+          <label class="checkbox-row inline-check">
+            <input type="checkbox" id="newDomainUseSsl">
+            Use WinRM HTTPS (5986)
+          </label>
           <input type="text" id="newDomainNotes" placeholder="Notes (optional)">
           <button type="submit">Save Domain</button>
         </form>
@@ -188,6 +208,65 @@
           <input type="checkbox" id="historyAllToggle"> Show all users' history (admin)
         </label>
         <div id="historyList" class="history-list"></div>
+      </section>
+
+      <section class="view hidden" id="view-adminPanel">
+        <h2>Admin Panel</h2>
+        <p class="view-sub">Customize branding, feature availability, security, and defaults for all AD Ops users.</p>
+
+        <div id="adminStats" class="admin-stats"></div>
+        <div id="adminSettingsMsg" class="error-msg"></div>
+
+        <form id="adminSettingsForm" class="admin-form">
+          <fieldset class="admin-card">
+            <legend>Branding</legend>
+            <label for="adminAppTitle">Application title</label>
+            <input type="text" id="adminAppTitle" maxlength="80" required>
+            <label for="adminTagline">Tagline</label>
+            <input type="text" id="adminTagline" maxlength="200" placeholder="Shown on login screen">
+          </fieldset>
+
+          <fieldset class="admin-card">
+            <legend>Features</legend>
+            <p class="view-sub">Disabled features are hidden in the UI and blocked on the server.</p>
+            <div class="admin-check-grid" id="adminFeatureToggles"></div>
+          </fieldset>
+
+          <fieldset class="admin-card">
+            <legend>Session &amp; Security</legend>
+            <label for="adminCredCacheHours">Domain credential cache (hours)</label>
+            <input type="number" id="adminCredCacheHours" min="1" max="24" step="1">
+            <p class="view-sub">How long connected domain passwords stay in server memory after connect.</p>
+            <label for="adminMinPasswordLength">Minimum local password length</label>
+            <input type="number" id="adminMinPasswordLength" min="8" max="128" step="1">
+            <label class="checkbox-row">
+              <input type="checkbox" id="adminAuditLogging">
+              Enable audit logging
+            </label>
+          </fieldset>
+
+          <fieldset class="admin-card">
+            <legend>History &amp; Defaults</legend>
+            <label for="adminHistoryMax">Max history records per list</label>
+            <input type="number" id="adminHistoryMax" min="25" max="1000" step="25">
+            <label class="checkbox-row">
+              <input type="checkbox" id="adminDefaultWinRmSsl">
+              Default new saved domains to WinRM HTTPS (5986)
+            </label>
+          </fieldset>
+
+          <div class="admin-actions">
+            <button type="submit" class="btn-primary">Save settings</button>
+            <button type="button" id="adminResetBtn" class="btn-secondary">Reset to defaults</button>
+          </div>
+        </form>
+
+        <section class="admin-card admin-audit-section">
+          <h3>Audit log</h3>
+          <p class="view-sub">Recent sign-ins, setting changes, and domain operations.</p>
+          <div id="adminAuditList" class="history-list"></div>
+          <button type="button" id="adminAuditMoreBtn" class="btn-secondary hidden">Load more</button>
+        </section>
       </section>
 
       <section class="view hidden" id="view-localUsers">
@@ -213,11 +292,11 @@
           </div>
           <div class="results-actions">
             <button type="button" id="drillBackBtn" class="btn-secondary hidden">← Back</button>
-            <div id="resultViewToggle" class="view-toggle hidden">
+            <div id="resultViewToggle" class="view-toggle hidden" data-feature="diagrams">
               <button type="button" class="active" data-view="table">Table</button>
               <button type="button" data-view="diagram">Diagram</button>
             </div>
-            <div class="export-buttons">
+            <div class="export-buttons" data-feature="export">
             <button data-fmt="md">Export .md</button>
             <button data-fmt="txt">Export .txt</button>
             <button data-fmt="xml">Export .xml</button>
@@ -253,6 +332,37 @@
       <div id="errorBanner" class="error-banner hidden"></div>
     </main>
   </div>
+</div>
+
+<div id="connectModal" class="modal hidden" role="dialog" aria-labelledby="connectModalTitle" aria-modal="true">
+  <div class="modal-backdrop" data-close-modal></div>
+  <form id="connectForm" class="modal-card">
+    <h3 id="connectModalTitle">Connect to Domain</h3>
+    <p class="view-sub">Domain credentials are encrypted in memory for your session. Passwords are only stored on disk when you opt in below.</p>
+    <label for="connectUsername">Domain account</label>
+    <input type="text" id="connectUsername" name="username" autocomplete="username" placeholder="CONTOSO\admin or admin@contoso.com" required>
+    <label for="connectPassword">Password</label>
+    <input type="password" id="connectPassword" name="password" autocomplete="current-password" placeholder="Required unless saved password is enabled">
+    <label class="checkbox-row">
+      <input type="checkbox" id="connectRememberUsername" checked>
+      Remember username for this domain
+    </label>
+    <label class="checkbox-row" data-feature="savedPasswords">
+      <input type="checkbox" id="connectRememberPassword">
+      Remember password on server (AES-encrypted)
+    </label>
+    <label class="checkbox-row">
+      <input type="checkbox" id="connectUseSsl">
+      Use WinRM over HTTPS (port 5986)
+    </label>
+    <p id="connectSavedHint" class="drill-hint hidden">A saved password is on file for this account. Leave password blank to reuse it.</p>
+    <div id="connectModalError" class="error-msg"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" data-close-modal>Cancel</button>
+      <button type="button" class="btn-secondary" id="clearSavedCredsBtn">Clear saved</button>
+      <button type="submit" class="btn-primary">Connect</button>
+    </div>
+  </form>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.min.js"></script>

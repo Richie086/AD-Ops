@@ -1,5 +1,6 @@
 const express = require('express');
 const { listHistory, getHistoryRecord } = require('../db');
+const { getHistoryLimit } = require('../settings');
 
 const router = express.Router();
 
@@ -8,7 +9,7 @@ const router = express.Router();
 router.get('/', (req, res) => {
   const isAdmin = req.session.role === 'admin';
   const all = isAdmin && req.query.all === '1';
-  const rows = listHistory(req.session.username, { all, limit: 200 });
+  const rows = listHistory(req.session.username, { all, limit: getHistoryLimit() });
   res.json(rows);
 });
 

@@ -3,7 +3,8 @@ const crypto = require('crypto');
 // Random per-process key. Credentials are encrypted at rest in memory and
 // automatically expire; they are never written to disk or logged.
 const KEY = crypto.randomBytes(32);
-const TTL_MS = 30 * 60 * 1000; // 30 minutes
+const TTL_DEFAULT_MS = 8 * 60 * 60 * 1000;
+let TTL_MS = TTL_DEFAULT_MS;
 
 const store = new Map(); // sessionId -> { domainId, iv, tag, data, expires }
 
@@ -52,4 +53,8 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-module.exports = { setCreds, getCreds, clearCreds };
+function setCredCacheTtlHours(hours) {
+  TTL_MS = Math.max(1, Number(hours) || 8) * 60 * 60 * 1000;
+}
+
+module.exports = { setCreds, getCreds, clearCreds, setCredCacheTtlHours };

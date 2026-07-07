@@ -2,6 +2,7 @@ const express = require('express');
 const { db, logAudit, recordHistory } = require('../db');
 const { runRemote, psEscapeLiteral } = require('../psRunner');
 const { requireDomainSession } = require('./domains');
+const { requireFeature } = require('../settings');
 
 const router = express.Router();
 
@@ -84,7 +85,7 @@ async function runQuery(req, res, scriptBody, args, actionLabel) {
   const creds = requireDomainSession(req, res, domainId);
   if (!creds) return;
 
-  const result = await runRemote(domain.dc_host, creds.username, creds.password, scriptBody, args);
+  const result = await runRemote(domain.dc_host, creds.username, creds.password, scriptBody, args, { useSsl: !!domain.use_ssl });
   logAudit(req.session.username, domain.label, actionLabel, JSON.stringify(args).slice(0, 500));
 
   const title = titleFromLabel(actionLabel);
@@ -163,6 +164,141 @@ router.post('/membership', (req, res) => {
   runQuery(req, res, script, [groupName], 'group_membership');
 });
 
+// Compare direct or nested membership between two groups.
+router.post('/group-compare', requireFeature('groupCompare'), (req, res) => {
+  const { groupA, groupB, includeNested } = req.body || {};
+  if (!groupA || !groupB) {
+    return res.status(400).json({ error: 'groupA and groupB are required' });
+  }
+  const nested = !!includeNested;
+  const script = `
+    ${AD_SERIALIZE_HELPER}
+    param($gA, $gB, [bool]$IncludeNested)
+
+    Import-Module ActiveDirectory
+
+    function Get-MemberKey($m) {
+        if ($m.DistinguishedName) { return [string]$m.DistinguishedName }
+        return "$($m.objectClass):$($m.SamAccountName)"
+    }
+
+    function Resolve-MemberObject($m) {
+        switch ($m.objectClass) {
+            'group' { Get-ADGroup -Identity $m.DistinguishedName -Properties DistinguishedName,Name,SamAccountName,objectClass }
+            'user' { Get-ADUser -Identity $m.DistinguishedName -Properties DistinguishedName,Name,SamAccountName,objectClass }
+            'computer' { Get-ADComputer -Identity $m.DistinguishedName -Properties DistinguishedName,Name,SamAccountName,objectClass }
+            default { $m }
+        }
+    }
+
+    function Get-DirectMemberMap($groupIdentity) {
+        $map = @{}
+        Get-ADGroupMember -Identity $groupIdentity -ErrorAction Stop | ForEach-Object {
+            $obj = Resolve-MemberObject $_
+            $map[(Get-MemberKey $obj)] = $obj
+        }
+        return $map
+    }
+
+    function Get-NestedMemberMap($groupIdentity) {
+        $map = @{}
+        $seen = New-Object System.Collections.Generic.HashSet[string]
+
+        function Resolve-Members($gi, $depth, $path) {
+            $members = Get-ADGroupMember -Identity $gi -ErrorAction SilentlyContinue
+            foreach ($m in $members) {
+                $key = Get-MemberKey $m
+                if ($seen.Contains($key)) { continue }
+                $seen.Add($key) | Out-Null
+                $map[$key] = [PSCustomObject]@{
+                    DistinguishedName = $m.DistinguishedName
+                    Name              = $m.Name
+                    SamAccountName    = $m.SamAccountName
+                    objectClass       = $m.objectClass
+                    Depth             = $depth
+                    ViaGroup          = $path
+                }
+                if ($m.objectClass -eq 'group') {
+                    Resolve-Members $m.SamAccountName ($depth + 1) "$path > $($m.Name)"
+                }
+            }
+        }
+
+        Resolve-Members $groupIdentity 1 $groupIdentity
+        return $map
+    }
+
+    function Export-Member($m) {
+        if ($IncludeNested) { return $m | ConvertTo-ExportableObject }
+        return $m | ConvertTo-ExportableObject
+    }
+
+    $groupAInfo = Get-ADGroup -Identity $gA -Properties DistinguishedName,Name,SamAccountName
+    $groupBInfo = Get-ADGroup -Identity $gB -Properties DistinguishedName,Name,SamAccountName
+
+    if ($IncludeNested) {
+        $membersA = Get-NestedMemberMap $gA
+        $membersB = Get-NestedMemberMap $gB
+    } else {
+        $membersA = Get-DirectMemberMap $gA
+        $membersB = Get-DirectMemberMap $gB
+    }
+
+    $keysA = @($membersA.Keys)
+    $keysB = @($membersB.Keys)
+    $setA = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]$keysA)
+    $setB = New-Object 'System.Collections.Generic.HashSet[string]' ([string[]]$keysB)
+
+    $onlyAKeys = @($keysA | Where-Object { -not $setB.Contains($_) })
+    $onlyBKeys = @($keysB | Where-Object { -not $setA.Contains($_) })
+    $bothKeys = @($keysA | Where-Object { $setB.Contains($_) })
+
+  [PSCustomObject]@{
+        groupA = [PSCustomObject]@{
+            Name              = $groupAInfo.Name
+            SamAccountName    = $groupAInfo.SamAccountName
+            DistinguishedName = $groupAInfo.DistinguishedName
+            MemberCount       = $keysA.Count
+        }
+        groupB = [PSCustomObject]@{
+            Name              = $groupBInfo.Name
+            SamAccountName    = $groupBInfo.SamAccountName
+            DistinguishedName = $groupBInfo.DistinguishedName
+            MemberCount       = $keysB.Count
+        }
+        includeNested = [bool]$IncludeNested
+        summary = [PSCustomObject]@{
+            onlyInA = $onlyAKeys.Count
+            onlyInB = $onlyBKeys.Count
+            inBoth  = $bothKeys.Count
+            totalA  = $keysA.Count
+            totalB  = $keysB.Count
+        }
+        onlyInA = @($onlyAKeys | ForEach-Object { Export-Member $membersA[$_] })
+        onlyInB = @($onlyBKeys | ForEach-Object { Export-Member $membersB[$_] })
+        inBoth  = @($bothKeys | Sort-Object | ForEach-Object {
+            $fromA = Export-Member $membersA[$_]
+            $fromB = Export-Member $membersB[$_]
+            if ($IncludeNested) {
+                [PSCustomObject]@{
+                    DistinguishedName = $fromA.DistinguishedName
+                    Name              = $fromA.Name
+                    SamAccountName    = $fromA.SamAccountName
+                    objectClass       = $fromA.objectClass
+                    DepthInA          = $fromA.Depth
+                    ViaGroupA         = $fromA.ViaGroup
+                    DepthInB          = $fromB.Depth
+                    ViaGroupB         = $fromB.ViaGroup
+                }
+            } else {
+                $fromA
+            }
+        })
+    }
+  `;
+  runQuery(req, res, script, [groupA, groupB, nested], 'group_compare');
+});
+
 // Fully recursive/nested group membership, flattened with a Depth marker
 // and de-duplicated so circular/nested groups don't loop.
 router.post('/nested-membership', (req, res) => {
@@ -227,7 +363,7 @@ router.post('/gpo', (req, res) => {
   runQuery(req, res, script, [], 'query_gpo_list');
 });
 
-router.post('/gpo-report', (req, res) => {
+router.post('/gpo-report', requireFeature('gpoReports'), (req, res) => {
   const { gpoName } = req.body || {};
   if (!gpoName) return res.status(400).json({ error: 'gpoName is required' });
   const script = `
@@ -246,7 +382,7 @@ router.post('/gpo-report', (req, res) => {
   runQuery(req, res, script, [gpoName], 'gpo_report');
 });
 
-router.post('/ou-tree', (req, res) => {
+router.post('/ou-tree', requireFeature('ouTree'), (req, res) => {
   const { root } = req.body || {};
   const script = `
     param($root)
@@ -297,7 +433,7 @@ router.post('/ou-tree', (req, res) => {
 });
 
 // Drill into a single AD/GPO object and return full properties plus related data.
-router.post('/object', (req, res) => {
+router.post('/object', requireFeature('drillDown'), (req, res) => {
   const { domainId, distinguishedName, objectClass, identity } = req.body || {};
   if (!domainId) return res.status(400).json({ error: 'domainId is required' });
   if (!distinguishedName && !identity) {
