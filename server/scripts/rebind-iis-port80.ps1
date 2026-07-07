@@ -100,10 +100,10 @@ function Show-RebindDiagnostics {
     }
 
     if (Test-IisHealth -Port $IisPort) {
-        Write-Host "  IIS health check on port $IisPort: OK" -ForegroundColor Green
+        Write-Host "  IIS health check on port ${IisPort}: OK" -ForegroundColor Green
     }
     else {
-        Write-Host "  IIS health check on port $IisPort: FAILED" -ForegroundColor Red
+        Write-Host "  IIS health check on port ${IisPort}: FAILED" -ForegroundColor Red
         Write-Host "  Run: .\diagnose-login.ps1 -IisPort $IisPort" -ForegroundColor Yellow
     }
 }
