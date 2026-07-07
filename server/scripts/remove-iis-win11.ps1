@@ -2,6 +2,7 @@ param(
     [string]$InstallPath = "C:\inetpub\AD-Ops",
     [string]$SiteName = "AD-Ops",
     [string]$AppPoolName = "AD-Ops-AppPool",
+    [int]$IisPort = 80,
     [int]$NodePort = 3000,
     [string]$NodeTaskName = "AD-Ops-Node",
     [switch]$RemoveInstallPath
@@ -19,6 +20,25 @@ function Assert-Admin {
     $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw "Run this script from an elevated PowerShell session (Run as Administrator)."
+    }
+}
+
+function Get-FirewallRuleName {
+    param([int]$Port)
+    return "AD-Ops IIS HTTP (Port $Port)"
+}
+
+function Remove-FirewallRule {
+    param([int]$Port)
+
+    $ruleName = Get-FirewallRuleName -Port $Port
+    $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Step "Removing firewall rule '$ruleName'"
+        Remove-NetFirewallRule -DisplayName $ruleName
+    }
+    else {
+        Write-Step "Firewall rule '$ruleName' not found, skipping"
     }
 }
 
@@ -120,6 +140,7 @@ Assert-Admin
 Remove-NodeTask
 Stop-NodePortProcess
 Remove-IisObjects
+Remove-FirewallRule -Port $IisPort
 Remove-InstallDirectory
 
 Write-Host ""
