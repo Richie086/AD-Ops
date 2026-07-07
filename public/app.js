@@ -5,9 +5,16 @@
       credentials: 'same-origin',
       ...opts,
     });
-    const body = await res.json().catch(() => ({}));
+    const contentType = res.headers.get('content-type') || '';
+    const body = contentType.includes('application/json')
+      ? await res.json().catch(() => ({}))
+      : { error: (await res.text().catch(() => '')).slice(0, 200) };
     if (!res.ok) {
-      const err = new Error(body.error || `Request failed (${res.status})`);
+      let message = body.error || `Request failed (${res.status})`;
+      if (!contentType.includes('application/json') && (res.status === 404 || res.status === 502 || res.status === 503)) {
+        message = 'IIS is not proxying /api requests to Node. On the server run: .\\server\\scripts\\repair-auth.ps1';
+      }
+      const err = new Error(message);
       err.status = res.status;
       err.raw = body.raw;
       err.command = body.command;

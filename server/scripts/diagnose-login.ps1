@@ -8,6 +8,10 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+. (Join-Path $PSScriptRoot 'ensure-windows-powershell.ps1')
+Ensure-WindowsPowerShell -ScriptBoundParameters $PSBoundParameters
+
 Set-Location $InstallPath
 
 Write-Host "=== AD-Ops login diagnostics ===" -ForegroundColor Cyan

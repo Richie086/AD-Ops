@@ -46,9 +46,11 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
 app.use(
   session({
+    name: 'adops.sid',
     secret: getSessionSecret(),
     resave: false,
     saveUninitialized: false,
+    rolling: true,
     proxy: true,
     cookie: {
       httpOnly: true,

@@ -261,7 +261,22 @@ function Resolve-HttpPortConflict {
         return
     }
 
-    if ($AllowDefaultWebSiteTakeover -and $conflictingSite -eq 'Default Web Site') {
+    # Default Web Site ships with IIS and commonly steals port 80; always remove its binding.
+    if ($conflictingSite -eq 'Default Web Site') {
+        Write-Step "Port $Port is bound by '$conflictingSite'; stopping site and removing its HTTP binding so AD-Ops can use port $Port"
+        Stop-Website -Name $conflictingSite -ErrorAction SilentlyContinue
+        $bindings = @(Get-WebBinding -Name $conflictingSite | Where-Object { $_.protocol -eq 'http' })
+        foreach ($binding in $bindings) {
+            $parts = $binding.bindingInformation -split ':'
+            if ($parts.Count -ge 2 -and [int]$parts[1] -eq $Port) {
+                Write-Step "Removing binding '$($binding.bindingInformation)' from '$conflictingSite'"
+                Remove-WebBinding -Name $conflictingSite -BindingInformation $binding.bindingInformation -Protocol http
+            }
+        }
+        return
+    }
+
+    if ($AllowDefaultWebSiteTakeover) {
         Write-Step "Port $Port is bound by '$conflictingSite'; stopping site and removing its HTTP binding so AD-Ops can use port $Port"
         Stop-Website -Name $conflictingSite -ErrorAction SilentlyContinue
         $bindings = @(Get-WebBinding -Name $conflictingSite | Where-Object { $_.protocol -eq 'http' })
@@ -321,10 +336,9 @@ function Set-IisHttpBinding {
 
 function Install-IisModules {
     Write-Step "Checking for required IIS modules (URL Rewrite and ARR)"
-    
+
     Import-IisAdministration
 
-    # Check for URL Rewrite
     $rewriteModule = Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' }
     if (-not $rewriteModule) {
         Write-Step "IIS URL Rewrite module not found. Attempting to install via winget..."
@@ -332,37 +346,106 @@ function Install-IisModules {
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to install IIS URL Rewrite module. Please install it manually from https://www.iis.net/downloads/microsoft/url-rewrite"
         }
-        Write-Step "URL Rewrite installed successfully."
+        Write-Step "URL Rewrite installed successfully. Restarting IIS..."
+        iisreset /restart | Out-Null
+        Start-Sleep -Seconds 3
+        Import-IisAdministration
     }
 
-    # Check if we can access the proxy configuration (indicates ARR is present)
+    $rewriteModule = Get-WebGlobalModule | Where-Object { $_.Name -eq 'RewriteModule' }
+    if (-not $rewriteModule) {
+        throw "IIS URL Rewrite module is still missing after install. Reboot and re-run setup."
+    }
+
+    $arrReady = $false
+    try {
+        Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -ErrorAction Stop | Out-Null
+        $arrReady = $true
+    }
+    catch {
+        $arrReady = $false
+    }
+
+    if (-not $arrReady) {
+        Write-Step "IIS Application Request Routing (ARR) not found. Attempting to install via winget..."
+        winget install Microsoft.IIS.ApplicationRequestRouting --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to install ARR. Install manually from https://www.iis.net/downloads/microsoft/application-request-routing and re-run."
+        }
+        Write-Step "ARR installed successfully. Restarting IIS..."
+        iisreset /restart | Out-Null
+        Start-Sleep -Seconds 3
+        Import-IisAdministration
+    }
+
     try {
         Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -ErrorAction Stop | Out-Null
     }
     catch {
-        Write-Step "IIS Application Request Routing (ARR) not found. Attempting to install via winget..."
-        winget install Microsoft.IIS.ApplicationRequestRouting --silent --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to install ARR. Please install it manually and re-run."
-        }
-        Write-Step "ARR installed successfully. Restarting IIS service to register module..."
-        Restart-Service W3SVC -Force
+        throw "ARR is not registered in IIS. Reboot the server, then re-run setup."
     }
+}
+
+function Enable-ArrReverseProxy {
+    Write-Step "Enabling IIS reverse proxy (ARR)"
+
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True' -ErrorAction Stop
+    Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'preserveHostHeader' -Value 'True' -ErrorAction Stop
+}
+
+function Write-AdOpsWebConfig {
+    param(
+        [string]$TargetPath,
+        [int]$NodePort
+    )
+
+    $webConfig = @"
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <system.webServer>
+    <defaultDocument enabled="false" />
+    <directoryBrowse enabled="false" />
+    <validation validateIntegratedModeConfiguration="false" />
+    <modules runAllManagedModulesForAllRequests="true" />
+    <rewrite>
+      <rules>
+        <rule name="ADOpsReverseProxy" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:$NodePort/{R:1}" appendQueryString="true" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+"@
+    Set-Content -Path $TargetPath -Value $webConfig -Encoding utf8
+}
+
+function Ensure-DataDirectory {
+    param([string]$RootPath)
+
+    $dataDir = Join-Path $RootPath 'data'
+    if (-not (Test-Path $dataDir)) {
+        New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+    }
+
+    # Node runs as SYSTEM via scheduled task; IIS app pool identity may read static files.
+    $acl = Get-Acl $dataDir
+    foreach ($identity in @('SYSTEM', 'Administrators', 'IIS_IUSRS')) {
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $identity, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow'
+        )
+        $acl.SetAccessRule($rule)
+    }
+    Set-Acl -Path $dataDir -AclObject $acl
 }
 
 function Configure-IisSite {
     Write-Step "Configuring IIS site '$SiteName'"
 
     Install-IisModules
-
-    Write-Step "Enabling IIS reverse proxy"
-    try {
-        Set-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter 'system.webServer/proxy' -Name 'enabled' -Value 'True' -ErrorAction Stop
-    }
-    catch {
-        Write-Host "Warning: Could not enable proxy via Set-WebConfigurationProperty. Ensure ARR is fully installed." -ForegroundColor Yellow
-        Write-Host $_.Exception.Message -ForegroundColor Gray
-    }
+    Enable-ArrReverseProxy
+    Ensure-DataDirectory -RootPath $InstallPath
 
     Ensure-IisAppPool -Name $AppPoolName
     Set-IisSiteProperties -SiteName $SiteName -PhysicalPath $InstallPath -ApplicationPool $AppPoolName
@@ -370,22 +453,8 @@ function Configure-IisSite {
     Set-IisHttpBinding -SiteName $SiteName -Port $IisPort -AllowDefaultWebSiteTakeover:$AllowDefaultWebSiteTakeover
 
     $webConfigPath = Join-Path $InstallPath 'web.config'
-    $webConfig = @"
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <system.webServer>
-    <rewrite>
-      <rules>
-        <rule name="ADOpsReverseProxy" stopProcessing="true">
-          <match url="(.*)" />
-          <action type="Rewrite" url="http://localhost:$NodePort/{R:1}" />
-        </rule>
-      </rules>
-    </rewrite>
-  </system.webServer>
-</configuration>
-"@
-    Set-Content -Path $webConfigPath -Value $webConfig -Encoding utf8
+    Write-AdOpsWebConfig -TargetPath $webConfigPath -NodePort $NodePort
+    Write-Step "Wrote reverse-proxy web.config (Node port $NodePort)"
 
     $site = Get-Website -Name $SiteName
     if ($site.state -ne "Started") {
