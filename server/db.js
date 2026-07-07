@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const Database = require('better-sqlite3');
@@ -74,11 +75,39 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 `);
 
-// --- Lightweight migration: add `role` column if this DB predates it. ---
-const cols = db.prepare("PRAGMA table_info(users)").all().map((c) => c.name);
-if (!cols.includes('role')) {
+// --- Lightweight migrations for databases created before newer columns/tables. ---
+const userCols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+if (!userCols.includes('role')) {
   db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'");
 }
+
+const domainCols = db.prepare('PRAGMA table_info(domains)').all().map((c) => c.name);
+if (!domainCols.includes('use_ssl')) {
+  db.exec('ALTER TABLE domains ADD COLUMN use_ssl INTEGER NOT NULL DEFAULT 0');
+}
+
+// Ensure newer tables exist even when domains/users were created on an older build.
+db.exec(`
+CREATE TABLE IF NOT EXISTS domain_user_prefs (
+  local_username TEXT NOT NULL,
+  domain_id INTEGER NOT NULL,
+  saved_username TEXT,
+  password_enc TEXT,
+  password_iv TEXT,
+  password_tag TEXT,
+  remember_password INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (local_username, domain_id),
+  FOREIGN KEY (domain_id) REFERENCES domains(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT
+);
+`);
 
 const VALID_ROLES = ['viewer', 'operator', 'admin'];
 
@@ -100,7 +129,8 @@ function logAudit(username, domainLabel, action, detail) {
     const { isAuditEnabled } = require('./settings');
     if (!isAuditEnabled()) return;
   } catch {
-    // settings not ready during bootstrap
+    // settings not ready during bootstrap — skip audit rather than break requests
+    return;
   }
   db.prepare('INSERT INTO audit_log (username, domain_label, action, detail) VALUES (?, ?, ?, ?)')
     .run(username || null, domainLabel || null, action, detail || null);

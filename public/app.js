@@ -101,10 +101,13 @@
         loginView.classList.add('hidden');
         changePwView.classList.remove('hidden');
       } else {
-        enterApp(result);
+        await enterApp(result);
       }
     } catch (err) {
       $('#loginError').textContent = err.message;
+      loginView.classList.remove('hidden');
+      changePwView.classList.add('hidden');
+      appView.classList.add('hidden');
     }
   });
 
@@ -118,7 +121,7 @@
       });
       changePwView.classList.add('hidden');
       const me = await api('/api/auth/me');
-      enterApp(me);
+      await enterApp(me);
     } catch (err) {
       $('#cpError').textContent = err.message;
     }
@@ -182,11 +185,27 @@
     appView.classList.remove('hidden');
     $('#userBadge').textContent = `${who.username} (${who.role})`;
     updateThemeButtons(getTheme());
-    await loadAppSettings();
-    applyRoleVisibility(who.role);
-    await loadDomains();
-    if (state.selectedDomainId) {
-      await refreshDomainSession(state.selectedDomainId);
+    try {
+      await loadAppSettings();
+      applyRoleVisibility(who.role);
+      try {
+        await loadDomains();
+      } catch (err) {
+        console.error('Failed to load domains after login:', err);
+        showError(err);
+      }
+      if (state.selectedDomainId) {
+        try {
+          await refreshDomainSession(state.selectedDomainId);
+        } catch {
+          state.connected = false;
+          updateConnStatus();
+        }
+      }
+    } catch (err) {
+      loginView.classList.remove('hidden');
+      appView.classList.add('hidden');
+      throw err;
     }
   }
 
