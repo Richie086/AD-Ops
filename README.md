@@ -18,13 +18,19 @@ See `DOCUMENTATION.md` for full architecture and API details.
 
 The project includes PowerShell scripts to automate deployment on Windows 10/11 using IIS as a reverse proxy and a Scheduled Task for the Node.js background process.
 
-### Automated Setup
+- **IIS port** (`-IisPort`): the public HTTP port clients use in the browser.
+- **Node port** (`-NodePort`): internal port for the Node process on `localhost`; IIS proxies to it. Default is **3000** and does not need to match the IIS port.
+
+Traffic is plain **HTTP** unless you add HTTPS/TLS bindings separately in IIS.
+
+### Automated Setup (default: IIS port 80)
 
 1. Open PowerShell as **Administrator**.
 2. Navigate to the scripts directory:
    ```powershell
-   cd server/scripts
+   cd server\scripts
    ```
+   If you cloned the repo elsewhere, use that path (for example `cd C:\inetpub\AD-Ops\server\scripts` after a prior install).
 3. Run the setup script:
    ```powershell
    .\setup-iis-win11.ps1
@@ -36,7 +42,32 @@ The project includes PowerShell scripts to automate deployment on Windows 10/11 
    - Clone/Sync the repository to `C:\inetpub\AD-Ops`.
    - Install all `npm` dependencies.
    - Create a Scheduled Task (`AD-Ops-Node`) to run the backend on startup.
-   - Configure an IIS Site and Reverse Proxy on port 80.
+   - Configure an IIS site and reverse proxy on port **80** (default).
+   - Create an inbound Windows Firewall rule for the IIS port.
+
+Browse: `http://localhost` or `http://<server-ip>`.
+
+### IIS on port 3001 (recommended when port 80 is in use)
+
+Use this when another site already binds port 80, or you want AD-Ops on a dedicated port.
+
+**Option A — helper script (port 3001, Node on 3000):**
+```powershell
+cd server\scripts
+.\setup-iis-win11-port3001.ps1
+```
+
+**Option B — explicit parameters:**
+```powershell
+cd server\scripts
+.\setup-iis-win11.ps1 -IisPort 3001 -NodePort 3000
+```
+
+Re-running either command on an existing install updates the AD-Ops site binding to port 3001 (stale HTTP bindings on that site are removed).
+
+Browse: `http://<server-ip>:3001` (HTTP, not HTTPS, unless you configure TLS).
+
+The setup script creates a firewall rule named `AD-Ops IIS HTTP (Port 3001)`. If you use a custom `-IisPort`, the rule name includes that port.
 
 ### Syncing Changes
 
@@ -50,10 +81,18 @@ Restart-ScheduledTask -TaskName "AD-Ops-Node"
 
 ### Uninstallation
 
-To completely remove the IIS site, app pool, scheduled task, and (optionally) the files:
+To completely remove the IIS site, app pool, scheduled task, firewall rule, and (optionally) the files:
+
+**Default IIS port 80:**
 ```powershell
-cd server/scripts
+cd server\scripts
 .\remove-iis-win11.ps1 -RemoveInstallPath
+```
+
+**If IIS was on port 3001:**
+```powershell
+cd server\scripts
+.\remove-iis-win11.ps1 -IisPort 3001 -RemoveInstallPath
 ```
 
 ## Manual Installation (Development)

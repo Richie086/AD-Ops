@@ -1,3 +1,15 @@
+<#
+.SYNOPSIS
+    Deploy AD-Ops on Windows 11 with IIS reverse proxy and a Node scheduled task.
+
+.PARAMETER IisPort
+    Public HTTP port IIS listens on (default 80). Use 3001 when port 80 is taken
+    or you want a non-privileged binding. Browse http://<server-ip>:<IisPort>.
+
+.PARAMETER NodePort
+    Internal port for the Node.js process (default 3000). IIS proxies to
+    localhost:NodePort; clients never connect to this port directly.
+#>
 param(
     [string]$RepoUrl = "https://github.com/Richie086/AD-Ops.git",
     [string]$InstallPath = "C:\inetpub\AD-Ops",
@@ -123,6 +135,100 @@ function Wait-NodePort {
     throw "Node app did not start on port $NodePort within timeout. Check scheduled task '$NodeTaskName'."
 }
 
+function Get-FirewallRuleName {
+    param([int]$Port)
+    return "AD-Ops IIS HTTP (Port $Port)"
+}
+
+function Ensure-FirewallRule {
+    param([int]$Port)
+
+    $ruleName = Get-FirewallRuleName -Port $Port
+    Write-Step "Ensuring inbound firewall rule for TCP port $Port"
+
+    $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-Step "Firewall rule '$ruleName' already exists"
+        return
+    }
+
+    New-NetFirewallRule `
+        -DisplayName $ruleName `
+        -Description "Allow inbound HTTP to AD-Ops IIS site on port $Port" `
+        -Direction Inbound `
+        -Action Allow `
+        -Protocol TCP `
+        -LocalPort $Port `
+        -Profile Any | Out-Null
+
+    Write-Step "Created firewall rule '$ruleName'"
+}
+
+function Get-SiteBoundToHttpPort {
+    param(
+        [int]$Port,
+        [string]$ExcludeSiteName
+    )
+
+    Import-Module WebAdministration
+
+    foreach ($site in Get-Website) {
+        if ($site.Name -eq $ExcludeSiteName) {
+            continue
+        }
+
+        foreach ($binding in (Get-WebBinding -Name $site.Name)) {
+            if ($binding.protocol -ne 'http') {
+                continue
+            }
+
+            $parts = $binding.bindingInformation -split ':'
+            if ($parts.Count -ge 2 -and [int]$parts[1] -eq $Port) {
+                return $site.Name
+            }
+        }
+    }
+
+    return $null
+}
+
+function Set-IisHttpBinding {
+    param(
+        [string]$SiteName,
+        [int]$Port
+    )
+
+    Import-Module WebAdministration
+
+    $bindingInfo = "*:${Port}:"
+    $conflictingSite = Get-SiteBoundToHttpPort -Port $Port -ExcludeSiteName $SiteName
+    if ($conflictingSite) {
+        throw "HTTP port $Port is already bound by IIS site '$conflictingSite'. Stop that site, choose another -IisPort, or remove its binding before re-running."
+    }
+
+    if (Test-Path "IIS:\Sites\$SiteName") {
+        $httpBindings = @(Get-WebBinding -Name $SiteName | Where-Object { $_.protocol -eq 'http' })
+        foreach ($binding in $httpBindings) {
+            if ($binding.bindingInformation -ne $bindingInfo) {
+                Write-Step "Removing stale HTTP binding '$($binding.bindingInformation)' from site '$SiteName'"
+                Remove-WebBinding -Name $SiteName -BindingInformation $binding.bindingInformation -Protocol http
+            }
+        }
+
+        $hasTargetBinding = @(Get-WebBinding -Name $SiteName | Where-Object {
+            $_.protocol -eq 'http' -and $_.bindingInformation -eq $bindingInfo
+        }).Count -gt 0
+
+        if (-not $hasTargetBinding) {
+            Write-Step "Adding HTTP binding $bindingInfo to site '$SiteName'"
+            New-WebBinding -Name $SiteName -Protocol http -Port $Port -IPAddress '*'
+        }
+    }
+    else {
+        New-Website -Name $SiteName -PhysicalPath $InstallPath -Port $Port -ApplicationPool $AppPoolName | Out-Null
+    }
+}
+
 function Install-IisModules {
     Write-Step "Checking for required IIS modules (URL Rewrite and ARR)"
     
@@ -178,22 +284,9 @@ function Configure-IisSite {
     if (Test-Path IIS:\Sites\$SiteName) {
         Set-ItemProperty IIS:\Sites\$SiteName -Name physicalPath -Value $InstallPath
         Set-ItemProperty IIS:\Sites\$SiteName -Name applicationPool -Value $AppPoolName
+    }
 
-        $bindingInfo = "*:${IisPort}:"
-        $existingBindings = Get-WebBinding -Name $SiteName
-        $hasPort = $false
-        foreach ($binding in $existingBindings) {
-            if ($binding.bindingInformation -eq $bindingInfo) {
-                $hasPort = $true
-            }
-        }
-        if (-not $hasPort) {
-            New-WebBinding -Name $SiteName -Protocol http -Port $IisPort -IPAddress '*'
-        }
-    }
-    else {
-        New-Website -Name $SiteName -PhysicalPath $InstallPath -Port $IisPort -ApplicationPool $AppPoolName | Out-Null
-    }
+    Set-IisHttpBinding -SiteName $SiteName -Port $IisPort
 
     $webConfigPath = Join-Path $InstallPath 'web.config'
     $webConfig = @"
@@ -228,6 +321,22 @@ function Configure-IisSite {
     }
 }
 
+function Get-PrimaryIPv4Address {
+    $address = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -notlike '127.*' -and
+            $_.PrefixOrigin -ne 'WellKnown'
+        } |
+        Sort-Object -Property InterfaceMetric |
+        Select-Object -First 1 -ExpandProperty IPAddress
+
+    if ($address) {
+        return $address
+    }
+
+    return '<server-ip>'
+}
+
 Assert-Admin
 Require-Command -Name 'git'
 Require-Command -Name 'node'
@@ -239,9 +348,16 @@ Install-NodeDependencies
 Register-NodeStartupTask
 Wait-NodePort
 Configure-IisSite
+Ensure-FirewallRule -Port $IisPort
+
+$serverIp = Get-PrimaryIPv4Address
 
 Write-Host ""
 Write-Host "Deployment complete." -ForegroundColor Green
 Write-Host "IIS site: $SiteName"
 Write-Host "Path: $InstallPath"
-Write-Host "URL: http://localhost:${IisPort}"
+Write-Host "IIS public port: $IisPort (Node internal port: $NodePort)"
+Write-Host "Local URL:  http://localhost:${IisPort}"
+Write-Host "Remote URL: http://${serverIp}:${IisPort}"
+Write-Host ""
+Write-Host "Traffic is HTTP only unless you add TLS bindings separately." -ForegroundColor DarkGray

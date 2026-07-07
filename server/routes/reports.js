@@ -1,9 +1,10 @@
 const express = require('express');
 const { generateReport } = require('../reportGen');
+const { requireFeature } = require('../settings');
 
 const router = express.Router();
 
-router.post('/export', (req, res) => {
+router.post('/export', requireFeature('export'), (req, res) => {
   const { format, title, data, command } = req.body || {};
   if (!format || !title || data === undefined) {
     return res.status(400).json({ error: 'format, title, and data are required' });

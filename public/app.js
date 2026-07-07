@@ -69,6 +69,20 @@
     lastMermaidSource: '',
     role: null,
     username: null,
+    appSettings: null,
+    adminAuditOffset: 0,
+  };
+
+  const FEATURE_LABELS = {
+    groupCompare: 'Group compare',
+    diagrams: 'Mermaid diagrams',
+    export: 'Result export',
+    scriptDeploy: 'Script deployment',
+    psRemoting: 'PS remoting configuration',
+    ouTree: 'OU structure tree',
+    savedPasswords: 'Saved domain passwords',
+    gpoReports: 'GPO XML reports',
+    drillDown: 'Object drill-down',
   };
 
   // ---------- Auth ----------
@@ -115,6 +129,51 @@
     location.reload();
   });
 
+  async function loadAppSettings() {
+    try {
+      state.appSettings = await api('/api/settings');
+      applyBranding(state.appSettings.branding);
+      applyFeatureVisibility();
+      applyDomainDefaults();
+    } catch {
+      state.appSettings = null;
+    }
+  }
+
+  function applyBranding(branding) {
+    const title = branding?.appTitle || 'AD Ops';
+    const tagline = branding?.tagline || 'Sign in to continue';
+    document.title = title;
+    const brand = $('#appBrand');
+    if (brand) brand.textContent = title;
+    const loginTitle = $('#loginAppTitle');
+    if (loginTitle) loginTitle.textContent = title;
+    const loginTagline = $('#loginTagline');
+    if (loginTagline) loginTagline.textContent = tagline;
+  }
+
+  function isFeatureEnabled(name) {
+    return state.appSettings?.features?.[name] !== false;
+  }
+
+  function applyFeatureVisibility() {
+    $$('[data-feature]').forEach((el) => {
+      const feature = el.dataset.feature;
+      const enabled = isFeatureEnabled(feature);
+      const roleHidden = el.classList.contains('role-gated') &&
+        ROLE_RANK[state.role] < ROLE_RANK[el.dataset.minRole || 'viewer'];
+      el.classList.toggle('hidden', !enabled || roleHidden);
+    });
+  }
+
+  function applyDomainDefaults() {
+    const sslDefault = !!state.appSettings?.defaults?.winRmSsl;
+    const sslBox = $('#newDomainUseSsl');
+    if (sslBox && !sslBox.dataset.userTouched) {
+      sslBox.checked = sslDefault;
+    }
+  }
+
   async function enterApp(who) {
     state.username = who.username;
     state.role = who.role;
@@ -123,20 +182,33 @@
     appView.classList.remove('hidden');
     $('#userBadge').textContent = `${who.username} (${who.role})`;
     updateThemeButtons(getTheme());
+    await loadAppSettings();
     applyRoleVisibility(who.role);
     await loadDomains();
+    if (state.selectedDomainId) {
+      await refreshDomainSession(state.selectedDomainId);
+    }
   }
 
   const ROLE_RANK = { viewer: 0, operator: 1, admin: 2 };
   function applyRoleVisibility(role) {
     $$('.role-gated').forEach((el) => {
       const minRole = el.dataset.minRole || 'viewer';
-      el.classList.toggle('hidden', ROLE_RANK[role] < ROLE_RANK[minRole]);
+      const roleOk = ROLE_RANK[role] >= ROLE_RANK[minRole];
+      const featureOk = !el.dataset.feature || isFeatureEnabled(el.dataset.feature);
+      el.classList.toggle('hidden', !roleOk || !featureOk);
+    });
+    $$('[data-feature]:not(.role-gated)').forEach((el) => {
+      el.classList.toggle('hidden', !isFeatureEnabled(el.dataset.feature));
     });
     $('#historyAllToggleWrap').classList.toggle('hidden', role !== 'admin');
   }
 
   // Check existing session on load.
+  fetch('/api/settings/branding', { credentials: 'same-origin' })
+    .then((r) => r.json())
+    .then(applyBranding)
+    .catch(() => {});
   api('/api/auth/me').then(enterApp).catch(() => {});
 
   // ---------- Nav ----------
@@ -150,6 +222,7 @@
       if (btn.dataset.view === 'domains') loadDomains();
       if (btn.dataset.view === 'history') loadHistory();
       if (btn.dataset.view === 'localUsers') loadLocalUsers();
+      if (btn.dataset.view === 'adminPanel') loadAdminPanel();
       $('#sideNav').classList.remove('open');
     });
   });
@@ -183,6 +256,10 @@
     }
   }
 
+  $('#newDomainUseSsl')?.addEventListener('change', (e) => {
+    e.target.dataset.userTouched = '1';
+  });
+
   $('#addDomainForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     await api('/api/domains', {
@@ -191,16 +268,137 @@
         label: $('#newDomainLabel').value,
         dcHost: $('#newDomainHost').value,
         notes: $('#newDomainNotes').value,
+        useSsl: $('#newDomainUseSsl').checked,
       }),
     });
     $('#addDomainForm').reset();
     loadDomains();
   });
 
-  $('#domainSelect').addEventListener('change', (e) => {
+  $('#domainSelect').addEventListener('change', async (e) => {
     state.selectedDomainId = e.target.value || null;
     state.connected = false;
     updateConnStatus();
+    if (state.selectedDomainId) {
+      await refreshDomainSession(state.selectedDomainId);
+    }
+  });
+
+  const connectModal = $('#connectModal');
+  const connectForm = $('#connectForm');
+
+  function openConnectModal() {
+    if (!state.selectedDomainId) {
+      alert('Select a saved domain first.');
+      return;
+    }
+    $('#connectModalError').textContent = '';
+    connectModal.classList.remove('hidden');
+    loadConnectPrefs(state.selectedDomainId);
+  }
+
+  function closeConnectModal() {
+    connectModal.classList.add('hidden');
+    connectForm.reset();
+    $('#connectRememberUsername').checked = true;
+    $('#connectSavedHint').classList.add('hidden');
+  }
+
+  async function loadConnectPrefs(domainId) {
+    try {
+      const prefs = await api(`/api/domains/${domainId}/prefs`);
+      $('#connectUsername').value = prefs.savedUsername || '';
+      $('#connectUseSsl').checked = !!prefs.useSsl;
+      const allowSaved = prefs.savedPasswordsAllowed !== false;
+      $$('[data-feature="savedPasswords"]', $('#connectModal')).forEach((el) => {
+        el.classList.toggle('hidden', !allowSaved);
+      });
+      $('#connectRememberPassword').checked = allowSaved && !!prefs.hasSavedPassword;
+      $('#connectSavedHint').classList.toggle('hidden', !allowSaved || !prefs.hasSavedPassword);
+      $('#connectPassword').required = allowSaved ? !prefs.hasSavedPassword : true;
+    } catch (err) {
+      $('#connectModalError').textContent = err.message;
+    }
+  }
+
+  async function refreshDomainSession(domainId) {
+    try {
+      const status = await api(`/api/domains/${domainId}/session`);
+      state.connected = !!status.connected;
+      updateConnStatus();
+    } catch {
+      state.connected = false;
+      updateConnStatus();
+    }
+  }
+
+  $('#connectBtn').addEventListener('click', openConnectModal);
+  $$('[data-close-modal]').forEach((el) => {
+    el.addEventListener('click', closeConnectModal);
+  });
+
+  $('#connectRememberPassword').addEventListener('change', (e) => {
+    const hasSaved = !$('#connectSavedHint').classList.contains('hidden');
+    $('#connectPassword').required = !e.target.checked && !hasSaved;
+  });
+
+  $('#clearSavedCredsBtn').addEventListener('click', async () => {
+    if (!state.selectedDomainId) return;
+    try {
+      await api(`/api/domains/${state.selectedDomainId}/prefs`, { method: 'DELETE' });
+      $('#connectPassword').value = '';
+      $('#connectPassword').required = true;
+      $('#connectRememberPassword').checked = false;
+      $('#connectSavedHint').classList.add('hidden');
+    } catch (err) {
+      $('#connectModalError').textContent = err.message;
+    }
+  });
+
+  connectForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#connectModalError').textContent = '';
+    const username = $('#connectUsername').value.trim();
+    const password = $('#connectPassword').value;
+    const rememberUsername = $('#connectRememberUsername').checked;
+    const rememberPassword = $('#connectRememberPassword').checked;
+    const useSsl = $('#connectUseSsl').checked;
+    const hasSaved = !$('#connectSavedHint').classList.contains('hidden');
+
+    if (!username) {
+      $('#connectModalError').textContent = 'Domain account is required.';
+      return;
+    }
+    if (!password && !hasSaved) {
+      $('#connectModalError').textContent = 'Password is required.';
+      return;
+    }
+
+    try {
+      $('#connStatus').textContent = 'Connecting…';
+      await api(`/api/domains/${state.selectedDomainId}/connect`, {
+        method: 'POST',
+        body: JSON.stringify({
+          username,
+          password,
+          rememberUsername,
+          rememberPassword,
+          useSsl,
+        }),
+      });
+      state.connected = true;
+      updateConnStatus();
+      closeConnectModal();
+    } catch (err) {
+      state.connected = false;
+      updateConnStatus();
+      $('#connectModalError').textContent = err.message;
+      if (err.raw || err.command) {
+        state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Domain connect failed' };
+        renderResults();
+      }
+      showError(err);
+    }
   });
 
   // ---------- History ----------
@@ -273,6 +471,142 @@
     });
   }
 
+  }
+
+  // ---------- Admin panel ----------
+  function populateAdminForm(settings) {
+    $('#adminAppTitle').value = settings.branding?.appTitle || 'AD Ops';
+    $('#adminTagline').value = settings.branding?.tagline || '';
+    $('#adminCredCacheHours').value = settings.session?.credCacheHours ?? 8;
+    $('#adminMinPasswordLength').value = settings.security?.minPasswordLength ?? 8;
+    $('#adminAuditLogging').checked = settings.security?.auditLogging !== false;
+    $('#adminHistoryMax').value = settings.history?.maxRecords ?? 200;
+    $('#adminDefaultWinRmSsl').checked = !!settings.defaults?.winRmSsl;
+
+    const grid = $('#adminFeatureToggles');
+    grid.innerHTML = Object.keys(FEATURE_LABELS).map((key) => `
+      <label class="checkbox-row">
+        <input type="checkbox" data-feature-key="${key}" ${settings.features?.[key] !== false ? 'checked' : ''}>
+        ${escapeHtml(FEATURE_LABELS[key])}
+      </label>`).join('');
+  }
+
+  function collectAdminSettings() {
+    const features = {};
+    $$('#adminFeatureToggles [data-feature-key]').forEach((cb) => {
+      features[cb.dataset.featureKey] = cb.checked;
+    });
+    return {
+      branding: {
+        appTitle: $('#adminAppTitle').value.trim(),
+        tagline: $('#adminTagline').value.trim(),
+      },
+      features,
+      session: { credCacheHours: Number($('#adminCredCacheHours').value) },
+      history: { maxRecords: Number($('#adminHistoryMax').value) },
+      defaults: { winRmSsl: $('#adminDefaultWinRmSsl').checked },
+      security: {
+        auditLogging: $('#adminAuditLogging').checked,
+        minPasswordLength: Number($('#adminMinPasswordLength').value),
+      },
+    };
+  }
+
+  async function loadAdminAudit(reset = false) {
+    if (reset) state.adminAuditOffset = 0;
+    const limit = 50;
+    const data = await api(`/api/admin/audit?limit=${limit}&offset=${state.adminAuditOffset}`);
+    const list = $('#adminAuditList');
+    const rowsHtml = data.rows.map((r) => `
+      <div class="history-row">
+        <span class="hbadge ok">${escapeHtml(r.action)}</span>
+        <span class="htitle">${escapeHtml(r.username || '—')}</span>
+        <span class="hmeta">${escapeHtml(r.domain_label || '')}${r.detail ? ' · ' + escapeHtml(r.detail) : ''}</span>
+        <span class="hmeta">${escapeHtml(r.created_at)}</span>
+      </div>`).join('');
+    if (reset) {
+      list.innerHTML = rowsHtml || '<p style="color:var(--muted)">No audit entries yet.</p>';
+    } else {
+      list.insertAdjacentHTML('beforeend', rowsHtml);
+    }
+    state.adminAuditOffset += data.rows.length;
+    $('#adminAuditMoreBtn').classList.toggle('hidden', state.adminAuditOffset >= data.total);
+  }
+
+  async function loadAdminPanel() {
+    $('#adminSettingsMsg').textContent = '';
+    try {
+      const [stats, settingsRes] = await Promise.all([
+        api('/api/admin/stats'),
+        api('/api/admin/settings'),
+      ]);
+      const settings = settingsRes.settings;
+      populateAdminForm(settings);
+
+      $('#adminStats').innerHTML = `
+        <div class="admin-stat"><span class="label">Local users</span><span class="value">${stats.users}</span></div>
+        <div class="admin-stat"><span class="label">Saved domains</span><span class="value">${stats.domains}</span></div>
+        <div class="admin-stat"><span class="label">Queries (24h)</span><span class="value">${stats.queriesToday}</span></div>
+        <div class="admin-stat"><span class="label">Audit entries</span><span class="value">${stats.auditEntries}</span></div>`;
+
+      if (stats.settingsUpdatedAt) {
+        $('#adminStats').insertAdjacentHTML('beforeend',
+          `<div class="admin-stat"><span class="label">Settings updated</span><span class="value" style="font-size:.85rem">${escapeHtml(stats.settingsUpdatedAt)}${stats.settingsUpdatedBy ? ' by ' + escapeHtml(stats.settingsUpdatedBy) : ''}</span></div>`);
+      }
+
+      await loadAdminAudit(true);
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  $('#adminSettingsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    $('#adminSettingsMsg').textContent = '';
+    try {
+      const res = await api('/api/admin/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({ settings: collectAdminSettings() }),
+      });
+      state.appSettings = {
+        branding: res.settings.branding,
+        features: res.settings.features,
+        defaults: res.settings.defaults,
+        security: { minPasswordLength: res.settings.security.minPasswordLength },
+      };
+      applyBranding(res.settings.branding);
+      applyRoleVisibility(state.role);
+      applyDomainDefaults();
+      $('#adminSettingsMsg').textContent = 'Settings saved.';
+      loadAdminPanel();
+    } catch (err) {
+      $('#adminSettingsMsg').textContent = err.message;
+      showError(err);
+    }
+  });
+
+  $('#adminResetBtn').addEventListener('click', async () => {
+    if (!confirm('Reset all AD Ops settings to defaults?')) return;
+    try {
+      const res = await api('/api/admin/settings/reset', { method: 'POST' });
+      state.appSettings = {
+        branding: res.settings.branding,
+        features: res.settings.features,
+        defaults: res.settings.defaults,
+        security: { minPasswordLength: res.settings.security.minPasswordLength },
+      };
+      applyBranding(res.settings.branding);
+      applyRoleVisibility(state.role);
+      applyDomainDefaults();
+      populateAdminForm(res.settings);
+      $('#adminSettingsMsg').textContent = 'Settings reset to defaults.';
+    } catch (err) {
+      showError(err);
+    }
+  });
+
+  $('#adminAuditMoreBtn').addEventListener('click', () => loadAdminAudit(false));
+
   $('#addLocalUserForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -284,34 +618,6 @@
       loadLocalUsers();
       alert(`Account created. Temporary password: ${res.tempPassword}`);
     } catch (err) {
-      showError(err);
-    }
-  });
-
-  $('#connectBtn').addEventListener('click', async () => {
-    if (!state.selectedDomainId) {
-      alert('Select a saved domain first.');
-      return;
-    }
-    const username = prompt('Domain admin username (e.g. CONTOSO\\admin):');
-    if (!username) return;
-    const password = prompt('Password:');
-    if (!password) return;
-    try {
-      $('#connStatus').textContent = 'Connecting…';
-      await api(`/api/domains/${state.selectedDomainId}/connect`, {
-        method: 'POST',
-        body: JSON.stringify({ username, password }),
-      });
-      state.connected = true;
-      updateConnStatus();
-    } catch (err) {
-      state.connected = false;
-      updateConnStatus();
-      if (err.raw || err.command) {
-        state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Domain connect failed' };
-        renderResults();
-      }
       showError(err);
     }
   });
@@ -352,6 +658,21 @@
     const target = $('#remotingTarget').value;
     const action = $('#remotingAction').value;
     await runQuery('/api/remoting/configure', { domainId: state.selectedDomainId, target, action }, 'PS Remoting: ' + action);
+  });
+
+  $('#groupCompareForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!requireConnection()) return;
+    const groupA = $('#compareGroupA').value.trim();
+    const groupB = $('#compareGroupB').value.trim();
+    const includeNested = $('#compareIncludeNested').checked;
+    const label = `Compare: ${groupA} vs ${groupB}`;
+    await runQuery('/api/ad/group-compare', {
+      domainId: state.selectedDomainId,
+      groupA,
+      groupB,
+      includeNested,
+    }, label);
   });
 
   function requireConnection() {
@@ -486,6 +807,9 @@
     if (data && typeof data === 'object' && data.object) {
       return { mode: 'detail', object: data.object, related: data.related || {} };
     }
+    if (data && typeof data === 'object' && data.groupA && data.groupB && Array.isArray(data.onlyInA)) {
+      return { mode: 'groupCompare', compare: data, related: {} };
+    }
     const rows = data == null ? [] : Array.isArray(data) ? data : [data];
     return { mode: 'list', rows, related: {} };
   }
@@ -502,7 +826,7 @@
   }
 
   function rowDrillAttrs(info) {
-    if (!info) return '';
+    if (!info || !isFeatureEnabled('drillDown')) return '';
     return ` class="drillable-row" data-drill-dn="${escapeAttr(info.distinguishedName)}"` +
       ` data-drill-class="${escapeAttr(info.objectClass || '')}"` +
       ` data-drill-identity="${escapeAttr(info.identity || '')}"` +
@@ -569,7 +893,6 @@
           startOnLoad: false,
           securityLevel: 'loose',
           theme: getTheme() === 'dark' ? 'dark' : 'default',
-          flowchart: { htmlLabels: true, curve: 'basis' },
         });
         state.mermaidReady = true;
       }
@@ -587,16 +910,17 @@
     const { data, raw, command } = state.lastResult;
     const normalized = normalizeResultData(data);
     const diagramCtx = getDiagramContext();
+    const diagramsAllowed = isFeatureEnabled('diagrams');
 
-    $('#resultViewToggle').classList.toggle('hidden', !diagramCtx);
-    if (!diagramCtx && state.resultView === 'diagram') {
+    $('#resultViewToggle').classList.toggle('hidden', !diagramCtx || !diagramsAllowed);
+    if ((!diagramCtx || !diagramsAllowed) && state.resultView === 'diagram') {
       state.resultView = 'table';
       $$('#resultViewToggle button').forEach((b) => {
         b.classList.toggle('active', b.dataset.view === 'table');
       });
     }
 
-    const showDiagram = diagramCtx && state.resultView === 'diagram';
+    const showDiagram = diagramCtx && diagramsAllowed && state.resultView === 'diagram';
     $('#resultsTableWrap').classList.toggle('hidden', showDiagram);
     $('#mermaidWrap').classList.toggle('hidden', !showDiagram);
 
@@ -610,8 +934,10 @@
         }
         html += buildDetailView(normalized.object);
         html += buildRelatedSections(normalized.related);
+      } else if (normalized.mode === 'groupCompare') {
+        html += buildGroupCompareView(normalized.compare);
       } else if (normalized.rows.length) {
-        const hasDrillable = normalized.rows.some((r) => getDrillInfo(r));
+        const hasDrillable = isFeatureEnabled('drillDown') && normalized.rows.some((r) => getDrillInfo(r));
         if (hasDrillable) {
           html += '<p class="drill-hint">Click a row to drill down into this object.</p>';
         }
@@ -668,6 +994,46 @@
       html += buildTable(related.groups);
       html += '</div>';
     }
+    return html;
+  }
+
+  function buildGroupCompareView(compare) {
+    if (!compare || typeof compare !== 'object') {
+      return '<p style="color:var(--muted)">No comparison data.</p>';
+    }
+    const a = compare.groupA || {};
+    const b = compare.groupB || {};
+    const summary = compare.summary || {};
+    const nestedLabel = compare.includeNested ? 'nested' : 'direct';
+    let html = `<p class="drill-hint">Comparing <strong>${escapeHtml(a.SamAccountName || a.Name || 'Group A')}</strong> vs <strong>${escapeHtml(b.SamAccountName || b.Name || 'Group B')}</strong> (${nestedLabel} membership).</p>`;
+    html += '<div class="compare-summary">';
+    html += `<span class="compare-stat">Group A members: <strong>${summary.totalA ?? 0}</strong></span>`;
+    html += `<span class="compare-stat">Group B members: <strong>${summary.totalB ?? 0}</strong></span>`;
+    html += `<span class="compare-stat">Only in A: <strong>${summary.onlyInA ?? 0}</strong></span>`;
+    html += `<span class="compare-stat">Only in B: <strong>${summary.onlyInB ?? 0}</strong></span>`;
+    html += `<span class="compare-stat">In both: <strong>${summary.inBoth ?? 0}</strong></span>`;
+    html += '</div>';
+
+    const sections = [
+      { key: 'onlyInA', title: `Only in ${a.SamAccountName || a.Name || 'Group A'}`, className: 'only-a' },
+      { key: 'inBoth', title: 'In Both Groups', className: 'both' },
+      { key: 'onlyInB', title: `Only in ${b.SamAccountName || b.Name || 'Group B'}`, className: 'only-b' },
+    ];
+    sections.forEach((section) => {
+      const rows = Array.isArray(compare[section.key]) ? compare[section.key] : [];
+      html += `<div class="related-section compare-section ${section.className}">`;
+      html += `<h4>${escapeHtml(section.title)} (${rows.length})</h4>`;
+      if (rows.length) {
+        const hasDrillable = rows.some((r) => getDrillInfo(r));
+        if (hasDrillable) {
+          html += '<p class="drill-hint">Click a row to drill down into this object.</p>';
+        }
+        html += buildTable(rows);
+      } else {
+        html += '<p style="color:var(--muted)">No members in this category.</p>';
+      }
+      html += '</div>';
+    });
     return html;
   }
 

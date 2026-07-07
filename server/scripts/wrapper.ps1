@@ -40,11 +40,25 @@ if ($data.Mode -eq 'perTarget') {
     $secpass = ConvertTo-SecureString $data.Pass -AsPlainText -Force
     $cred = New-Object System.Management.Automation.PSCredential($data.User, $secpass)
     $sb = [ScriptBlock]::Create($data.Script)
-    $sessionOpt = New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000
-
     $results = foreach ($t in $data.Targets) {
         try {
-            $out = Invoke-Command -ComputerName $t -Credential $cred -ScriptBlock $sb -SessionOption $sessionOpt -ErrorAction Stop
+            $sessionOpt = if ($data.UseSSL) {
+                New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000 -SkipCACheck -SkipCNCheck -SkipRevocationCheck
+            } else {
+                New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000
+            }
+            $params = @{
+                ComputerName  = $t
+                Credential    = $cred
+                ScriptBlock   = $sb
+                SessionOption = $sessionOpt
+                ErrorAction   = 'Stop'
+            }
+            if ($data.UseSSL) {
+                $params.UseSSL = $true
+                $params.Port = 5986
+            }
+            $out = Invoke-Command @params
             [PSCustomObject]@{
                 Target  = $t
                 Success = $true
@@ -71,7 +85,11 @@ try {
 
     $sb = [ScriptBlock]::Create($data.Script)
 
-    $sessionOpt = New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000
+    $sessionOpt = if ($data.UseSSL) {
+        New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000 -SkipCACheck -SkipCNCheck -SkipRevocationCheck
+    } else {
+        New-PSSessionOption -OperationTimeout 60000 -OpenTimeout 30000
+    }
 
     $params = @{
         ComputerName  = $data.DC
@@ -79,6 +97,10 @@ try {
         ScriptBlock   = $sb
         SessionOption = $sessionOpt
         ErrorAction   = 'Stop'
+    }
+    if ($data.UseSSL) {
+        $params.UseSSL = $true
+        $params.Port = 5986
     }
     if ($data.Args) {
         $params.ArgumentList = $data.Args

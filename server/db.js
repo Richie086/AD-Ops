@@ -52,6 +52,26 @@ CREATE TABLE IF NOT EXISTS query_history (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_history_username ON query_history(username);
+
+CREATE TABLE IF NOT EXISTS domain_user_prefs (
+  local_username TEXT NOT NULL,
+  domain_id INTEGER NOT NULL,
+  saved_username TEXT,
+  password_enc TEXT,
+  password_iv TEXT,
+  password_tag TEXT,
+  remember_password INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (local_username, domain_id),
+  FOREIGN KEY (domain_id) REFERENCES domains(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_by TEXT
+);
 `);
 
 // --- Lightweight migration: add `role` column if this DB predates it. ---
@@ -76,6 +96,12 @@ if (!adminUser) {
 }
 
 function logAudit(username, domainLabel, action, detail) {
+  try {
+    const { isAuditEnabled } = require('./settings');
+    if (!isAuditEnabled()) return;
+  } catch {
+    // settings not ready during bootstrap
+  }
   db.prepare('INSERT INTO audit_log (username, domain_label, action, detail) VALUES (?, ?, ?, ?)')
     .run(username || null, domainLabel || null, action, detail || null);
 }

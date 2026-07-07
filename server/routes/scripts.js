@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { db, logAudit, recordHistory } = require('../db');
 const { runPerTarget } = require('../psRunner');
 const { requireDomainSession } = require('./domains');
+const { requireFeature } = require('../settings');
 
 const router = express.Router();
 
@@ -13,7 +14,7 @@ function getDomain(id) {
 // Deploy/execute an arbitrary script body on one or more target computers,
 // each isolated so one unreachable/erroring host doesn't sink the batch.
 // Returns a per-target pass/fail summary: [{Target, Success, Output, Error}].
-router.post('/deploy', async (req, res) => {
+router.post('/deploy', requireFeature('scriptDeploy'), async (req, res) => {
   const { domainId, targets, scriptContent } = req.body || {};
   if (!domainId || !Array.isArray(targets) || targets.length === 0 || !scriptContent) {
     return res.status(400).json({ error: 'domainId, targets (non-empty array), and scriptContent are required' });
@@ -25,7 +26,7 @@ router.post('/deploy', async (req, res) => {
   const creds = requireDomainSession(req, res, domainId);
   if (!creds) return;
 
-  const result = await runPerTarget(targets, creds.username, creds.password, scriptContent);
+  const result = await runPerTarget(targets, creds.username, creds.password, scriptContent, { useSsl: !!domain.use_ssl });
 
   const scriptHash = crypto.createHash('sha256').update(scriptContent).digest('hex').slice(0, 16);
   logAudit(req.session.username, domain.label, 'script_deploy', `targets=${targets.join(',')} sha256=${scriptHash}`);
