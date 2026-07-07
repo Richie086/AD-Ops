@@ -5,6 +5,69 @@ const { requireDomainSession } = require('./domains');
 
 const router = express.Router();
 
+// Prepended to AD query scripts so every attribute serializes cleanly to JSON.
+const AD_SERIALIZE_HELPER = `
+function ConvertTo-ExportableObject {
+    param([Parameter(ValueFromPipeline = $true)]$InputObject)
+    begin {
+        function Convert-PropertyValue($v) {
+            if ($null -eq $v) { return $null }
+            if ($v -is [byte[]]) { return [Convert]::ToBase64String($v) }
+            if ($v -is [datetime]) { return $v.ToString('o') }
+            if ($v -is [guid]) { return $v.ToString() }
+            if ($v -is [System.Security.Principal.SecurityIdentifier]) { return $v.Value }
+            if ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) {
+                return @($v | ForEach-Object { Convert-PropertyValue $_ })
+            }
+            return $v
+        }
+    }
+    process {
+        if ($null -eq $InputObject) { return $null }
+        $props = @{}
+        foreach ($prop in $InputObject.PSObject.Properties) {
+            if ($prop.Name -match '^(?:PS|CLR|Runspace)') { continue }
+            $props[$prop.Name] = Convert-PropertyValue $prop.Value
+        }
+        $dn = $null
+        if ($props.ContainsKey('DistinguishedName')) {
+            $dn = $props['DistinguishedName']
+            $props.Remove('DistinguishedName')
+        }
+        elseif ($props.ContainsKey('distinguishedName')) {
+            $dn = $props['distinguishedName']
+            $props.Remove('distinguishedName')
+        }
+        elseif ($InputObject.DistinguishedName) {
+            $dn = $InputObject.DistinguishedName
+        }
+        $out = [ordered]@{}
+        if ($dn) { $out['DistinguishedName'] = $dn }
+        foreach ($key in ($props.Keys | Sort-Object)) {
+            $out[$key] = $props[$key]
+        }
+        [PSCustomObject]$out
+    }
+}
+
+function Convert-GpoToExportableObject {
+    param(
+        [Parameter(ValueFromPipeline = $true)]$Gpo,
+        [string]$DomainDn
+    )
+    process {
+        $obj = $Gpo | ConvertTo-ExportableObject
+        if (-not $DomainDn) { return $obj }
+        $dn = "CN={$($Gpo.Id)},CN=Policies,CN=System,$DomainDn"
+        $out = [ordered]@{ DistinguishedName = $dn }
+        foreach ($prop in $obj.PSObject.Properties) {
+            if ($prop.Name -ne 'DistinguishedName') { $out[$prop.Name] = $prop.Value }
+        }
+        [PSCustomObject]$out
+    }
+}
+`.trim();
+
 function getDomain(id) {
   return db.prepare('SELECT * FROM domains WHERE id = ?').get(id);
 }
@@ -45,10 +108,11 @@ router.post('/users', (req, res) => {
   const { query } = req.body || {};
   const filterVal = query && query.trim() ? query.trim() : '*';
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($q)
     Import-Module ActiveDirectory
-    Get-ADUser -Filter "Name -like '$q' -or SamAccountName -like '$q'" -Properties DisplayName,EmailAddress,Enabled,LastLogonDate,Title,Department,Description |
-      Select-Object Name,SamAccountName,DisplayName,EmailAddress,Enabled,Title,Department,LastLogonDate,Description
+    Get-ADUser -Filter "Name -like '$q' -or SamAccountName -like '$q'" -Properties * |
+      ConvertTo-ExportableObject
   `;
   runQuery(req, res, script, [`*${filterVal.replace(/\*/g, '')}*`], 'query_users');
 });
@@ -57,10 +121,11 @@ router.post('/groups', (req, res) => {
   const { query } = req.body || {};
   const filterVal = query && query.trim() ? query.trim() : '*';
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($q)
     Import-Module ActiveDirectory
-    Get-ADGroup -Filter "Name -like '$q'" -Properties Description,GroupCategory,GroupScope,Members |
-      Select-Object Name,SamAccountName,GroupCategory,GroupScope,Description,@{N='MemberCount';E={($_.Members).Count}}
+    Get-ADGroup -Filter "Name -like '$q' -or SamAccountName -like '$q'" -Properties * |
+      ConvertTo-ExportableObject
   `;
   runQuery(req, res, script, [`*${filterVal.replace(/\*/g, '')}*`], 'query_groups');
 });
@@ -69,10 +134,11 @@ router.post('/computers', (req, res) => {
   const { query } = req.body || {};
   const filterVal = query && query.trim() ? query.trim() : '*';
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($q)
     Import-Module ActiveDirectory
-    Get-ADComputer -Filter "Name -like '$q'" -Properties OperatingSystem,OperatingSystemVersion,LastLogonDate,Enabled,IPv4Address |
-      Select-Object Name,DNSHostName,OperatingSystem,OperatingSystemVersion,Enabled,IPv4Address,LastLogonDate
+    Get-ADComputer -Filter "Name -like '$q' -or SamAccountName -like '$q'" -Properties * |
+      ConvertTo-ExportableObject
   `;
   runQuery(req, res, script, [`*${filterVal.replace(/\*/g, '')}*`], 'query_computers');
 });
@@ -82,10 +148,17 @@ router.post('/membership', (req, res) => {
   const { groupName } = req.body || {};
   if (!groupName) return res.status(400).json({ error: 'groupName is required' });
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($g)
     Import-Module ActiveDirectory
-    Get-ADGroupMember -Identity $g |
-      Select-Object Name,SamAccountName,objectClass,distinguishedName
+    Get-ADGroupMember -Identity $g | ForEach-Object {
+        switch ($_.objectClass) {
+            'group' { Get-ADGroup -Identity $_.DistinguishedName -Properties * }
+            'user' { Get-ADUser -Identity $_.DistinguishedName -Properties * }
+            'computer' { Get-ADComputer -Identity $_.DistinguishedName -Properties * }
+            default { $_ }
+        }
+    } | ConvertTo-ExportableObject
   `;
   runQuery(req, res, script, [groupName], 'group_membership');
 });
@@ -96,6 +169,7 @@ router.post('/nested-membership', (req, res) => {
   const { groupName } = req.body || {};
   if (!groupName) return res.status(400).json({ error: 'groupName is required' });
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($g)
     Import-Module ActiveDirectory
 
@@ -109,11 +183,12 @@ router.post('/nested-membership', (req, res) => {
             if ($seen.Contains($key)) { continue }
             $seen.Add($key) | Out-Null
             [void]$results.Add([PSCustomObject]@{
-                Name         = $m.Name
-                SamAccountName = $m.SamAccountName
-                objectClass  = $m.objectClass
-                Depth        = $depth
-                ViaGroup     = $path
+                DistinguishedName = $m.DistinguishedName
+                Name              = $m.Name
+                SamAccountName    = $m.SamAccountName
+                objectClass       = $m.objectClass
+                Depth             = $depth
+                ViaGroup          = $path
             })
             if ($m.objectClass -eq 'group') {
                 Resolve-Members $m.SamAccountName ($depth + 1) "$path > $($m.Name)"
@@ -122,7 +197,7 @@ router.post('/nested-membership', (req, res) => {
     }
 
     Resolve-Members $g 1 $g
-    $results
+    $results | ConvertTo-ExportableObject
   `;
   runQuery(req, res, script, [groupName], 'nested_group_membership');
 });
@@ -132,18 +207,22 @@ router.post('/principal-groups', (req, res) => {
   const { principal } = req.body || {};
   if (!principal) return res.status(400).json({ error: 'principal is required' });
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($p)
     Import-Module ActiveDirectory
-    Get-ADPrincipalGroupMembership -Identity $p |
-      Select-Object Name,SamAccountName,GroupCategory,GroupScope
+    Get-ADPrincipalGroupMembership -Identity $p | ForEach-Object {
+        Get-ADGroup -Identity $_ -Properties * | ConvertTo-ExportableObject
+    }
   `;
   runQuery(req, res, script, [principal], 'principal_group_membership');
 });
 
 router.post('/gpo', (req, res) => {
   const script = `
-    Import-Module GroupPolicy
-    Get-GPO -All | Select-Object DisplayName,Id,GpoStatus,CreationTime,ModificationTime,Owner
+    ${AD_SERIALIZE_HELPER}
+    Import-Module ActiveDirectory, GroupPolicy
+    $domainDn = (Get-ADDomain).DistinguishedName
+    Get-GPO -All | Convert-GpoToExportableObject -DomainDn $domainDn
   `;
   runQuery(req, res, script, [], 'query_gpo_list');
 });
@@ -152,12 +231,156 @@ router.post('/gpo-report', (req, res) => {
   const { gpoName } = req.body || {};
   if (!gpoName) return res.status(400).json({ error: 'gpoName is required' });
   const script = `
+    ${AD_SERIALIZE_HELPER}
     param($name)
-    Import-Module GroupPolicy
+    Import-Module ActiveDirectory, GroupPolicy
+    $domainDn = (Get-ADDomain).DistinguishedName
+    $gpo = Get-GPO -Name $name
     $xml = Get-GPOReport -Name $name -ReportType Xml
-    [PSCustomObject]@{ Name = $name; ReportXml = $xml }
+    [PSCustomObject]@{
+        DistinguishedName = "CN={$($gpo.Id)},CN=Policies,CN=System,$domainDn"
+        Gpo = ($gpo | Convert-GpoToExportableObject -DomainDn $domainDn)
+        ReportXml = $xml
+    }
   `;
   runQuery(req, res, script, [gpoName], 'gpo_report');
+});
+
+router.post('/ou-tree', (req, res) => {
+  const { root } = req.body || {};
+  const script = `
+    param($root)
+    Import-Module ActiveDirectory
+
+    function Get-ParentDn([string]$dn) {
+        $comma = $dn.IndexOf(',')
+        if ($comma -lt 0) { return $null }
+        return $dn.Substring($comma + 1)
+    }
+
+    $domain = Get-ADDomain
+    $searchBase = $domain.DistinguishedName
+    $rootName = $domain.DNSRoot
+    $rootClass = 'domain'
+
+    if ($root -and $root.Trim()) {
+        $ou = Get-ADOrganizationalUnit -Identity $root.Trim()
+        $searchBase = $ou.DistinguishedName
+        $rootName = $ou.Name
+        $rootClass = 'organizationalUnit'
+    }
+
+    $nodes = [System.Collections.ArrayList]@()
+    [void]$nodes.Add([PSCustomObject]@{
+        DistinguishedName = $searchBase
+        Name = $rootName
+        Description = $null
+        ParentDistinguishedName = $null
+        objectClass = $rootClass
+    })
+
+    Get-ADOrganizationalUnit -Filter * -SearchBase $searchBase -SearchScope Subtree -Properties DistinguishedName,Name,Description |
+        ForEach-Object {
+            if ($_.DistinguishedName -eq $searchBase) { return }
+            [void]$nodes.Add([PSCustomObject]@{
+                DistinguishedName = $_.DistinguishedName
+                Name = $_.Name
+                Description = $_.Description
+                ParentDistinguishedName = (Get-ParentDn $_.DistinguishedName)
+                objectClass = 'organizationalUnit'
+            })
+        }
+
+    $nodes
+  `;
+  runQuery(req, res, script, [root || ''], 'query_ou_tree');
+});
+
+// Drill into a single AD/GPO object and return full properties plus related data.
+router.post('/object', (req, res) => {
+  const { domainId, distinguishedName, objectClass, identity } = req.body || {};
+  if (!domainId) return res.status(400).json({ error: 'domainId is required' });
+  if (!distinguishedName && !identity) {
+    return res.status(400).json({ error: 'distinguishedName or identity is required' });
+  }
+
+  const script = `
+    ${AD_SERIALIZE_HELPER}
+    param($dn, $class, $identity)
+    Import-Module ActiveDirectory, GroupPolicy
+
+    function Get-FullDirectoryObject {
+        param($dn, $class, $identity)
+        if ($dn -and $dn -match ',CN=Policies,CN=System,') {
+            $gpoId = ($dn -replace '^CN=\\{?([^,}]+)\\}?,CN=Policies,CN=System,.*$', '$1')
+            $gpo = Get-GPO -Guid $gpoId
+            $domainDn = (Get-ADDomain).DistinguishedName
+            $xml = Get-GPOReport -Guid $gpoId -ReportType Xml
+            return [PSCustomObject]@{
+                DistinguishedName = "CN={$($gpo.Id)},CN=Policies,CN=System,$domainDn"
+                ObjectClass = 'gpo'
+                Gpo = ($gpo | Convert-GpoToExportableObject -DomainDn $domainDn)
+                ReportXml = $xml
+            }
+        }
+        $resolvedClass = $class
+        if (-not $resolvedClass -and $dn) {
+            $resolvedClass = (Get-ADObject -Identity $dn -Properties objectClass).objectClass
+        }
+        switch ($resolvedClass) {
+            'user' {
+                if ($dn) { return Get-ADUser -Identity $dn -Properties * }
+                return Get-ADUser -Identity $identity -Properties *
+            }
+            'group' {
+                if ($dn) { return Get-ADGroup -Identity $dn -Properties * }
+                return Get-ADGroup -Identity $identity -Properties *
+            }
+            'computer' {
+                if ($dn) { return Get-ADComputer -Identity $dn -Properties * }
+                return Get-ADComputer -Identity $identity -Properties *
+            }
+            'organizationalUnit' {
+                if ($dn) { return Get-ADOrganizationalUnit -Identity $dn -Properties * }
+                return Get-ADOrganizationalUnit -Identity $identity -Properties *
+            }
+            default {
+                if ($dn) { return Get-ADObject -Identity $dn -Properties * }
+                return Get-ADObject -Identity $identity -Properties *
+            }
+        }
+    }
+
+    $obj = Get-FullDirectoryObject -dn $dn -class $class -identity $identity
+    $exported = if ($obj.ObjectClass -eq 'gpo') { $obj } else { $obj | ConvertTo-ExportableObject }
+    $className = if ($obj.ObjectClass) { $obj.ObjectClass } elseif ($obj.objectClass) { $obj.objectClass } else { $class }
+    $lookup = if ($dn) { $dn } elseif ($exported.DistinguishedName) { $exported.DistinguishedName } else { $identity }
+
+    $related = [ordered]@{}
+    if ($className -eq 'group') {
+        $related.members = @(Get-ADGroupMember -Identity $lookup -ErrorAction SilentlyContinue | ForEach-Object {
+            [PSCustomObject]@{
+                DistinguishedName = $_.DistinguishedName
+                Name = $_.Name
+                SamAccountName = $_.SamAccountName
+                objectClass = $_.objectClass
+            }
+        })
+    }
+    elseif ($className -eq 'user' -or $className -eq 'computer') {
+        $related.groups = @(Get-ADPrincipalGroupMembership -Identity $lookup -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ADGroup -Identity $_ -Properties DistinguishedName,Name,SamAccountName,GroupCategory,GroupScope |
+                ConvertTo-ExportableObject
+        })
+    }
+
+    [PSCustomObject]@{
+        object = $exported
+        related = [PSCustomObject]$related
+    }
+  `;
+
+  runQuery(req, res, script, [distinguishedName || '', objectClass || '', identity || ''], 'object_detail');
 });
 
 module.exports = router;

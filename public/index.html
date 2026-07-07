@@ -5,8 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AD Ops</title>
 <link rel="stylesheet" href="style.css">
+<script>
+(function () {
+  if (localStorage.getItem('adops-theme') === 'dark') {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+})();
+</script>
 </head>
 <body>
+
+<button type="button" id="themeToggleAuth" class="theme-toggle" aria-label="Toggle light/dark mode" title="Toggle light/dark mode">🌙</button>
 
 <!-- LOGIN VIEW -->
 <div id="loginView" class="auth-screen">
@@ -47,6 +56,7 @@
       <span id="connStatus" class="conn-status">Not connected</span>
     </div>
     <span id="userBadge" class="user-badge"></span>
+    <button type="button" id="themeToggleApp" class="theme-toggle icon-btn" aria-label="Toggle light/dark mode" title="Toggle light/dark mode">🌙</button>
     <button id="logoutBtn" class="icon-btn" title="Log out">⏻</button>
   </header>
 
@@ -59,6 +69,7 @@
       <button class="nav-item" data-view="nested">Nested Membership</button>
       <button class="nav-item" data-view="principalGroups">User's Groups</button>
       <button class="nav-item" data-view="gpo">Group Policy</button>
+      <button class="nav-item" data-view="ouTree">OU Structure</button>
       <button class="nav-item role-gated" data-min-role="operator" data-view="deploy">Deploy Script</button>
       <button class="nav-item role-gated" data-min-role="operator" data-view="remoting">PS Remoting</button>
       <button class="nav-item" data-view="domains">Saved Domains</button>
@@ -128,6 +139,15 @@
         </form>
       </section>
 
+      <section class="view hidden" id="view-ouTree">
+        <h2>Organizational Unit Structure</h2>
+        <p class="view-sub">Browse the AD OU hierarchy and view it as a Mermaid diagram.</p>
+        <form class="query-form" data-endpoint="/api/ad/ou-tree" data-body="root">
+          <input type="text" name="root" placeholder="Root OU name or DN (blank = entire domain)">
+          <button type="submit">Load OU Tree</button>
+        </form>
+      </section>
+
       <section class="view hidden" id="view-deploy">
         <h2>Deploy / Run PowerShell Script</h2>
         <form class="query-form" id="deployForm">
@@ -187,18 +207,44 @@
 
       <div id="resultsArea" class="results-area hidden">
         <div class="results-header">
-          <h3>Results</h3>
-          <div class="export-buttons">
+          <div class="results-title-wrap">
+            <h3 id="resultsTitle">Results</h3>
+            <div id="drillBreadcrumb" class="drill-breadcrumb hidden"></div>
+          </div>
+          <div class="results-actions">
+            <button type="button" id="drillBackBtn" class="btn-secondary hidden">← Back</button>
+            <div id="resultViewToggle" class="view-toggle hidden">
+              <button type="button" class="active" data-view="table">Table</button>
+              <button type="button" data-view="diagram">Diagram</button>
+            </div>
+            <div class="export-buttons">
             <button data-fmt="md">Export .md</button>
             <button data-fmt="txt">Export .txt</button>
             <button data-fmt="xml">Export .xml</button>
             <button data-fmt="html">Export .html</button>
+            </div>
           </div>
         </div>
         <div id="resultsTableWrap" class="table-wrap"></div>
+        <div id="mermaidWrap" class="mermaid-wrap hidden">
+          <div class="mermaid-toolbar">
+            <span id="mermaidToolbarLabel" class="drill-hint">Diagram</span>
+            <button type="button" id="copyMermaidBtn" class="btn-secondary">Copy Mermaid</button>
+          </div>
+          <div id="mermaidDiagram" class="mermaid-diagram"></div>
+          <details class="mermaid-source-details">
+            <summary>Mermaid source</summary>
+            <pre id="mermaidSource" class="raw-output json-output"></pre>
+          </details>
+        </div>
 
-        <details id="rawDetails" open>
-          <summary>Raw command output</summary>
+        <details id="jsonDetails" open>
+          <summary>Formatted JSON</summary>
+          <pre id="formattedJson" class="raw-output json-output"></pre>
+        </details>
+
+        <details id="rawDetails">
+          <summary>Raw PowerShell output</summary>
           <div class="raw-command" id="rawCommand"></div>
           <pre id="rawOutput" class="raw-output"></pre>
         </details>
@@ -209,6 +255,9 @@
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.0/dist/mermaid.min.js"></script>
+<script src="membershipDiagram.js"></script>
+<script src="ouDiagram.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

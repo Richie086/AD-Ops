@@ -16,7 +16,23 @@ function collectColumns(rows) {
       }
     }
   }
-  return cols.length ? cols : ['value'];
+  return sortColumns(cols.length ? cols : ['value']);
+}
+
+function sortColumns(cols) {
+  return [...cols].sort((a, b) => {
+    if (a === 'DistinguishedName') return -1;
+    if (b === 'DistinguishedName') return 1;
+    return 0;
+  });
+}
+
+function prettyJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function cellText(row, col) {
@@ -24,7 +40,7 @@ function cellText(row, col) {
   if (typeof row !== 'object') return col === 'value' ? String(row) : '';
   const v = row[col];
   if (v == null) return '';
-  if (typeof v === 'object') return JSON.stringify(v);
+  if (typeof v === 'object') return prettyJson(v);
   return String(v);
 }
 

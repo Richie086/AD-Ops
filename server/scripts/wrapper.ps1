@@ -23,7 +23,7 @@ function Write-JsonResult {
     if ($null -eq $Payload) {
         $json = '[]'
     } else {
-        $params = @{ InputObject = $Payload; Depth = 8; Compress = $true }
+        $params = @{ InputObject = $Payload; Depth = 12 }
         # -EnumerateCollection exists in PowerShell 6+ only (not Windows PS 5.1).
         if ($PSVersionTable.PSVersion.Major -ge 6) {
             $params.EnumerateCollection = $true

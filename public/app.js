@@ -18,10 +18,55 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
+  const THEME_KEY = 'adops-theme';
+
+  function getTheme() {
+    return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  }
+
+  function updateThemeButtons(theme) {
+    const label = theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+    const icon = theme === 'dark' ? '☀️' : '🌙';
+    ['#themeToggleAuth', '#themeToggleApp'].forEach((sel) => {
+      const btn = $(sel);
+      if (!btn) return;
+      btn.textContent = icon;
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+    });
+    const authToggle = $('#themeToggleAuth');
+    const appView = $('#appView');
+    if (authToggle && appView) {
+      authToggle.classList.toggle('hidden', !appView.classList.contains('hidden'));
+    }
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
+    updateThemeButtons(theme);
+    state.mermaidReady = false;
+    if (state.lastResult && state.resultView === 'diagram' && getDiagramContext()) {
+      renderResults();
+    }
+  }
+
+  function toggleTheme() {
+    applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+  }
+
+  $('#themeToggleAuth')?.addEventListener('click', toggleTheme);
+  $('#themeToggleApp')?.addEventListener('click', toggleTheme);
+  updateThemeButtons(getTheme());
+
   let state = {
     selectedDomainId: null,
     connected: false,
-    lastResult: null, // { data, raw, command, title }
+    lastResult: null, // { data, raw, command, title, meta? }
+    drillStack: [],
+    resultView: 'table',
+    mermaidReady: false,
+    lastMermaidSource: '',
     role: null,
     username: null,
   };
@@ -77,6 +122,7 @@
     changePwView.classList.add('hidden');
     appView.classList.remove('hidden');
     $('#userBadge').textContent = `${who.username} (${who.role})`;
+    updateThemeButtons(getTheme());
     applyRoleVisibility(who.role);
     await loadDomains();
   }
@@ -180,6 +226,7 @@
 
   async function viewHistoryItem(id) {
     const record = await api('/api/history/' + id);
+    state.drillStack = [];
     state.lastResult = { data: record.data, raw: record.raw, command: record.command, title: record.title };
     renderResults();
   }
@@ -315,29 +362,313 @@
     return true;
   }
 
+  function buildQueryMeta(endpoint, payload) {
+    if (endpoint === '/api/ad/membership') {
+      return { diagramType: 'membership', membershipType: 'direct', rootGroup: payload.groupName };
+    }
+    if (endpoint === '/api/ad/nested-membership') {
+      return { diagramType: 'membership', membershipType: 'nested', rootGroup: payload.groupName };
+    }
+    if (endpoint === '/api/ad/ou-tree') {
+      return { diagramType: 'ou', root: payload.root || '' };
+    }
+    return null;
+  }
+
   async function runQuery(endpoint, payload, title) {
     hideError();
+    state.drillStack = [];
+    state.resultView = endpoint === '/api/ad/ou-tree' ? 'diagram' : 'table';
     try {
       const result = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
-      state.lastResult = { data: result.data, raw: result.raw, command: result.command, title };
+      state.lastResult = {
+        data: result.data,
+        raw: result.raw,
+        command: result.command,
+        title,
+        meta: buildQueryMeta(endpoint, payload),
+      };
       renderResults();
     } catch (err) {
-      state.lastResult = { data: null, raw: err.raw, command: err.command, title };
+      state.lastResult = { data: null, raw: err.raw, command: err.command, title, meta: null };
+      renderResults();
+      showError(err);
+    }
+  }
+
+  $$('#resultViewToggle button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.resultView = btn.dataset.view;
+      $$('#resultViewToggle button').forEach((b) => b.classList.toggle('active', b === btn));
+      renderResults();
+    });
+  });
+
+  $('#copyMermaidBtn').addEventListener('click', async () => {
+    if (!state.lastMermaidSource) return;
+    try {
+      await navigator.clipboard.writeText(state.lastMermaidSource);
+      $('#copyMermaidBtn').textContent = 'Copied!';
+      setTimeout(() => { $('#copyMermaidBtn').textContent = 'Copy Mermaid'; }, 1500);
+    } catch {
+      alert(state.lastMermaidSource);
+    }
+  });
+
+  $('#drillBackBtn').addEventListener('click', () => {
+    if (!state.drillStack.length) return;
+    state.lastResult = state.drillStack.pop();
+    renderResults();
+  });
+
+  $('#resultsTableWrap').addEventListener('click', (e) => {
+    const row = e.target.closest('tr[data-drill-dn]');
+    if (!row) return;
+    drillInto({
+      distinguishedName: row.dataset.drillDn,
+      objectClass: row.dataset.drillClass || null,
+      identity: row.dataset.drillIdentity || null,
+    });
+  });
+
+  async function drillInto(info) {
+    if (!requireConnection()) return;
+    hideError();
+    try {
+      $('#resultsTableWrap').innerHTML = '<p style="color:var(--muted)">Loading object details…</p>';
+      const result = await api('/api/ad/object', {
+        method: 'POST',
+        body: JSON.stringify({
+          domainId: state.selectedDomainId,
+          distinguishedName: info.distinguishedName,
+          objectClass: info.objectClass || null,
+          identity: info.identity || null,
+        }),
+      });
+      state.drillStack.push(state.lastResult);
+      const label = info.distinguishedName || info.identity || 'Object';
+      state.lastResult = {
+        data: result.data,
+        raw: result.raw,
+        command: result.command,
+        title: `Object: ${label}`,
+        meta: result.data?.related?.members?.length
+          ? {
+              diagramType: 'membership',
+              membershipType: 'direct',
+              rootGroup: result.data.object?.SamAccountName || result.data.object?.Name || label,
+            }
+          : null,
+      };
+      renderResults();
+    } catch (err) {
       renderResults();
       showError(err);
     }
   }
 
   // ---------- Results rendering ----------
+  function prettyJson(value) {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  function formatCellValue(v) {
+    if (v == null) return '';
+    if (typeof v === 'object') return prettyJson(v);
+    return String(v);
+  }
+
+  function normalizeResultData(data) {
+    if (data && typeof data === 'object' && data.object) {
+      return { mode: 'detail', object: data.object, related: data.related || {} };
+    }
+    const rows = data == null ? [] : Array.isArray(data) ? data : [data];
+    return { mode: 'list', rows, related: {} };
+  }
+
+  function getDrillInfo(row) {
+    if (!row || typeof row !== 'object') return null;
+    const dn = row.DistinguishedName || row.distinguishedName;
+    if (!dn) return null;
+    let objectClass = row.objectClass || row.ObjectClass || null;
+    if (!objectClass && dn.includes(',CN=Policies,CN=System,')) objectClass = 'gpo';
+    if (!objectClass && dn.startsWith('OU=')) objectClass = 'organizationalUnit';
+    const identity = row.SamAccountName || row.Name || row.DisplayName || null;
+    return { distinguishedName: dn, objectClass, identity };
+  }
+
+  function rowDrillAttrs(info) {
+    if (!info) return '';
+    return ` class="drillable-row" data-drill-dn="${escapeAttr(info.distinguishedName)}"` +
+      ` data-drill-class="${escapeAttr(info.objectClass || '')}"` +
+      ` data-drill-identity="${escapeAttr(info.identity || '')}"` +
+      ' title="Click to drill down into this object"';
+  }
+
+  function updateDrillNav() {
+    const hasStack = state.drillStack.length > 0;
+    $('#drillBackBtn').classList.toggle('hidden', !hasStack);
+    const crumb = $('#drillBreadcrumb');
+    if (hasStack) {
+      crumb.classList.remove('hidden');
+      const trail = state.drillStack.map((s) => s.title || 'Results').join(' › ');
+      crumb.textContent = `${trail} › ${state.lastResult?.title || 'Detail'}`;
+    } else {
+      crumb.classList.add('hidden');
+      crumb.textContent = '';
+    }
+    $('#resultsTitle').textContent = state.lastResult?.title || 'Results';
+  }
+
+  function getDiagramContext() {
+    if (!state.lastResult) return null;
+
+    if (window.OuDiagram) {
+      const ouCtx = OuDiagram.extractContext(state.lastResult.data, state.lastResult.meta);
+      if (ouCtx) {
+        return {
+          label: 'OU structure diagram',
+          toMermaid: () => OuDiagram.toMermaid(ouCtx),
+        };
+      }
+    }
+
+    if (window.MembershipDiagram) {
+      const membershipCtx = MembershipDiagram.extractContext(state.lastResult.data, state.lastResult.meta);
+      if (membershipCtx) {
+        return {
+          label: 'Group membership diagram',
+          toMermaid: () => MembershipDiagram.toMermaid(membershipCtx),
+        };
+      }
+    }
+
+    return null;
+  }
+
+  async function renderMermaidDiagram(diagramCtx) {
+    const code = diagramCtx.toMermaid();
+    state.lastMermaidSource = code;
+    $('#mermaidSource').textContent = code;
+    $('#mermaidToolbarLabel').textContent = diagramCtx.label;
+    const host = $('#mermaidDiagram');
+    host.innerHTML = '<p style="color:var(--muted)">Rendering diagram…</p>';
+
+    if (!window.mermaid) {
+      host.innerHTML = '<p class="mermaid-error">Mermaid failed to load. Check network access to the CDN.</p>';
+      return;
+    }
+
+    try {
+      if (!state.mermaidReady) {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'loose',
+          theme: getTheme() === 'dark' ? 'dark' : 'default',
+          flowchart: { htmlLabels: true, curve: 'basis' },
+        });
+        state.mermaidReady = true;
+      }
+      const id = `diagram-${Date.now()}`;
+      const { svg } = await mermaid.render(id, code);
+      host.innerHTML = svg;
+    } catch (err) {
+      host.innerHTML = `<pre class="mermaid-error">${escapeHtml(err.message || 'Could not render diagram.')}</pre>`;
+    }
+  }
+
   function renderResults() {
     const area = $('#resultsArea');
     area.classList.remove('hidden');
     const { data, raw, command } = state.lastResult;
+    const normalized = normalizeResultData(data);
+    const diagramCtx = getDiagramContext();
 
-    const rows = data == null ? [] : Array.isArray(data) ? data : [data];
-    $('#resultsTableWrap').innerHTML = rows.length ? buildTable(rows) : '<p style="color:var(--muted)">No rows returned.</p>';
+    $('#resultViewToggle').classList.toggle('hidden', !diagramCtx);
+    if (!diagramCtx && state.resultView === 'diagram') {
+      state.resultView = 'table';
+      $$('#resultViewToggle button').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === 'table');
+      });
+    }
+
+    const showDiagram = diagramCtx && state.resultView === 'diagram';
+    $('#resultsTableWrap').classList.toggle('hidden', showDiagram);
+    $('#mermaidWrap').classList.toggle('hidden', !showDiagram);
+
+    if (showDiagram) {
+      renderMermaidDiagram(diagramCtx);
+    } else {
+      let html = '';
+      if (normalized.mode === 'detail') {
+        if (diagramCtx) {
+          html += '<p class="drill-hint">Switch to <strong>Diagram</strong> to view this result as a Mermaid chart.</p>';
+        }
+        html += buildDetailView(normalized.object);
+        html += buildRelatedSections(normalized.related);
+      } else if (normalized.rows.length) {
+        const hasDrillable = normalized.rows.some((r) => getDrillInfo(r));
+        if (hasDrillable) {
+          html += '<p class="drill-hint">Click a row to drill down into this object.</p>';
+        }
+        if (diagramCtx) {
+          html += '<p class="drill-hint">Switch to <strong>Diagram</strong> to view this result as a Mermaid chart.</p>';
+        }
+        html += buildTable(normalized.rows);
+      } else {
+        html = '<p style="color:var(--muted)">No rows returned.</p>';
+      }
+      $('#resultsTableWrap').innerHTML = html;
+    }
+
+    $('#formattedJson').textContent = data == null ? '(no data)' : prettyJson(data);
     $('#rawCommand').textContent = command ? 'Command: ' + command : '';
     $('#rawOutput').textContent = raw || '(no output)';
+    updateDrillNav();
+  }
+
+  function buildDetailView(obj) {
+    if (!obj || typeof obj !== 'object') {
+      return '<p style="color:var(--muted)">No object data.</p>';
+    }
+    const keys = Object.keys(obj).sort((a, b) => {
+      if (a === 'DistinguishedName') return -1;
+      if (b === 'DistinguishedName') return 1;
+      return a.localeCompare(b);
+    });
+    let html = '<table class="result-table detail-table"><thead><tr><th>Property</th><th>Value</th></tr></thead><tbody>';
+    keys.forEach((k) => {
+      const v = obj[k];
+      let cell;
+      if (v != null && typeof v === 'object') {
+        cell = `<pre class="cell-json">${escapeHtml(formatCellValue(v))}</pre>`;
+      } else {
+        cell = escapeHtml(v == null ? '' : String(v));
+      }
+      html += `<tr><th>${escapeHtml(k)}</th><td>${cell}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    return html;
+  }
+
+  function buildRelatedSections(related) {
+    if (!related || typeof related !== 'object') return '';
+    let html = '';
+    if (Array.isArray(related.members) && related.members.length) {
+      html += `<div class="related-section"><h4>Direct Members (${related.members.length})</h4>`;
+      html += buildTable(related.members);
+      html += '</div>';
+    }
+    if (Array.isArray(related.groups) && related.groups.length) {
+      html += `<div class="related-section"><h4>Group Membership (${related.groups.length})</h4>`;
+      html += buildTable(related.groups);
+      html += '</div>';
+    }
+    return html;
   }
 
   function buildTable(rows) {
@@ -349,13 +680,21 @@
       }
     });
     if (!cols.length) cols.push('value');
+    cols.sort((a, b) => {
+      if (a === 'DistinguishedName') return -1;
+      if (b === 'DistinguishedName') return 1;
+      return 0;
+    });
     let html = '<table class="result-table"><thead><tr>' + cols.map((c) => `<th>${escapeHtml(c)}</th>`).join('') + '</tr></thead><tbody>';
     rows.forEach((r) => {
-      html += '<tr>' + cols.map((c) => {
-        let v = typeof r === 'object' && r ? r[c] : (c === 'value' ? r : '');
-        if (v && typeof v === 'object') v = JSON.stringify(v);
+      const drill = getDrillInfo(r);
+      html += `<tr${rowDrillAttrs(drill)}>` + cols.map((c) => {
+        const v = typeof r === 'object' && r ? r[c] : (c === 'value' ? r : '');
         if (c === 'Success' && typeof v === 'boolean') {
           return `<td class="status-${v}">${v ? '✅ Success' : '❌ Failed'}</td>`;
+        }
+        if (v != null && typeof v === 'object') {
+          return `<td><pre class="cell-json">${escapeHtml(formatCellValue(v))}</pre></td>`;
         }
         return `<td>${escapeHtml(v == null ? '' : String(v))}</td>`;
       }).join('') + '</tr>';
@@ -366,6 +705,9 @@
 
   function clearResults() {
     $('#resultsArea').classList.add('hidden');
+    state.drillStack = [];
+    state.resultView = 'table';
+    state.lastMermaidSource = '';
     hideError();
   }
 
@@ -415,5 +757,9 @@
 
   function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function escapeAttr(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   }
 })();
