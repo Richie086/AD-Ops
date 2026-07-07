@@ -1,7 +1,7 @@
 # Diagnose AD-Ops login and backend connectivity on the Windows host.
 param(
     [string]$InstallPath = "C:\inetpub\AD-Ops",
-    [int]$IisPort = 3001,
+    [int]$IisPort = 80,
     [int]$NodePort = 3000,
     [string]$Username = "admin",
     [string]$Password = "admin"

@@ -47,27 +47,29 @@ Traffic is plain **HTTP** unless you add HTTPS/TLS bindings separately in IIS.
 
 Browse: `http://localhost` or `http://<server-ip>`.
 
-### IIS on port 3001 (recommended when port 80 is in use)
+### Revert IIS from port 3001 to port 80
 
-Use this when another site already binds port 80, or you want AD-Ops on a dedicated port.
+If login or the app broke after moving to port 3001, rebind to the default IIS port:
 
-**Option A — helper script (port 3001, Node on 3000):**
 ```powershell
-cd server\scripts
-.\setup-iis-win11-port3001.ps1
+cd C:\inetpub\AD-Ops\server\scripts
+.\rebind-iis-port80.ps1
+cd C:\inetpub\AD-Ops
+.\server\scripts\reset-local-admin.ps1 -Password admin
 ```
 
-**Option B — explicit parameters:**
+Then use **`http://<server-ip>`** (no port number) — not `:3001`.
+
+### Optional: IIS on a custom port (e.g. 3001)
+
+Only use a non-standard IIS port if port 80 is already taken. Some environments have seen session/auth issues behind alternate ports; **port 80 is recommended.**
+
 ```powershell
 cd server\scripts
 .\setup-iis-win11.ps1 -IisPort 3001 -NodePort 3000
 ```
 
-Re-running either command on an existing install updates the AD-Ops site binding to port 3001 (stale HTTP bindings on that site are removed).
-
-Browse: `http://<server-ip>:3001` (HTTP, not HTTPS, unless you configure TLS).
-
-The setup script creates a firewall rule named `AD-Ops IIS HTTP (Port 3001)`. If you use a custom `-IisPort`, the rule name includes that port.
+Browse: `http://<server-ip>:3001`
 
 ### Syncing Changes
 
@@ -147,7 +149,7 @@ $env:ADOPS_RESET_ADMIN_PASSWORD = 'admin'
 npm start
 ```
 
-Then sign in at `http://<server-ip>:3001` with **admin** / **admin**.
+Then sign in at `http://<server-ip>` with **admin** / **admin**.
 
 
 ### Roles

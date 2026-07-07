@@ -3,8 +3,8 @@
     Deploy AD-Ops on Windows 11 with IIS reverse proxy and a Node scheduled task.
 
 .PARAMETER IisPort
-    Public HTTP port IIS listens on (default 80). Use 3001 when port 80 is taken
-    or you want a non-privileged binding. Browse http://<server-ip>:<IisPort>.
+    Public HTTP port IIS listens on (default 80). Use a custom port only when
+    port 80 is already taken. Browse http://<server-ip> or http://<server-ip>:<IisPort>.
 
 .PARAMETER NodePort
     Internal port for the Node.js process (default 3000). IIS proxies to
