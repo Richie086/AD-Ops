@@ -17,7 +17,9 @@ param(
     [string]$AppPoolName = "AD-Ops-AppPool",
     [int]$IisPort = 80,
     [int]$NodePort = 3000,
-    [string]$NodeTaskName = "AD-Ops-Node"
+    [string]$NodeTaskName = "AD-Ops-Node",
+    [switch]$SkipRepoSync,
+    [switch]$AllowDefaultWebSiteTakeover
 )
 
 $ErrorActionPreference = 'Stop'
@@ -192,19 +194,54 @@ function Get-SiteBoundToHttpPort {
     return $null
 }
 
+function Resolve-HttpPortConflict {
+    param(
+        [int]$Port,
+        [string]$TargetSiteName,
+        [switch]$AllowDefaultWebSiteTakeover
+    )
+
+    Import-Module WebAdministration
+
+    $conflictingSite = Get-SiteBoundToHttpPort -Port $Port -ExcludeSiteName $TargetSiteName
+    if (-not $conflictingSite) {
+        return
+    }
+
+    if ($AllowDefaultWebSiteTakeover -and $conflictingSite -eq 'Default Web Site') {
+        Write-Step "Port $Port is bound by '$conflictingSite'; stopping site and removing its HTTP binding so AD-Ops can use port $Port"
+        Stop-Website -Name $conflictingSite -ErrorAction SilentlyContinue
+        $bindings = @(Get-WebBinding -Name $conflictingSite | Where-Object { $_.protocol -eq 'http' })
+        foreach ($binding in $bindings) {
+            $parts = $binding.bindingInformation -split ':'
+            if ($parts.Count -ge 2 -and [int]$parts[1] -eq $Port) {
+                Write-Step "Removing binding '$($binding.bindingInformation)' from '$conflictingSite'"
+                Remove-WebBinding -Name $conflictingSite -BindingInformation $binding.bindingInformation -Protocol http
+            }
+        }
+        return
+    }
+
+    throw @"
+HTTP port $Port is already bound by IIS site '$conflictingSite'.
+Stop that site and remove its port $Port binding, or pass -AllowDefaultWebSiteTakeover when rebinding from port 3001.
+Example:
+  Stop-Website -Name '$conflictingSite'
+  Remove-WebBinding -Name '$conflictingSite' -BindingInformation '*:${Port}:' -Protocol http
+"@
+}
+
 function Set-IisHttpBinding {
     param(
         [string]$SiteName,
-        [int]$Port
+        [int]$Port,
+        [switch]$AllowDefaultWebSiteTakeover
     )
 
     Import-Module WebAdministration
 
     $bindingInfo = "*:${Port}:"
-    $conflictingSite = Get-SiteBoundToHttpPort -Port $Port -ExcludeSiteName $SiteName
-    if ($conflictingSite) {
-        throw "HTTP port $Port is already bound by IIS site '$conflictingSite'. Stop that site, choose another -IisPort, or remove its binding before re-running."
-    }
+    Resolve-HttpPortConflict -Port $Port -TargetSiteName $SiteName -AllowDefaultWebSiteTakeover:$AllowDefaultWebSiteTakeover
 
     if (Test-Path "IIS:\Sites\$SiteName") {
         $httpBindings = @(Get-WebBinding -Name $SiteName | Where-Object { $_.protocol -eq 'http' })
@@ -286,7 +323,7 @@ function Configure-IisSite {
         Set-ItemProperty IIS:\Sites\$SiteName -Name applicationPool -Value $AppPoolName
     }
 
-    Set-IisHttpBinding -SiteName $SiteName -Port $IisPort
+    Set-IisHttpBinding -SiteName $SiteName -Port $IisPort -AllowDefaultWebSiteTakeover:$AllowDefaultWebSiteTakeover
 
     $webConfigPath = Join-Path $InstallPath 'web.config'
     $webConfig = @"
@@ -321,6 +358,19 @@ function Configure-IisSite {
     }
 }
 
+function Format-IisUrl {
+    param(
+        [string]$HostName,
+        [int]$Port
+    )
+
+    if ($Port -eq 80) {
+        return "http://${HostName}"
+    }
+
+    return "http://${HostName}:${Port}"
+}
+
 function Get-PrimaryIPv4Address {
     $address = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object {
@@ -343,21 +393,33 @@ Require-Command -Name 'node'
 Require-Command -Name 'npm'
 
 Enable-Iis
-Sync-Repository
-Install-NodeDependencies
+
+if ($SkipRepoSync) {
+    if (-not (Test-Path $InstallPath)) {
+        throw "InstallPath '$InstallPath' does not exist. Omit -SkipRepoSync for a fresh install."
+    }
+    Write-Step "Skipping repository sync and npm install (-SkipRepoSync)"
+}
+else {
+    Sync-Repository
+    Install-NodeDependencies
+}
+
 Register-NodeStartupTask
 Wait-NodePort
 Configure-IisSite
 Ensure-FirewallRule -Port $IisPort
 
 $serverIp = Get-PrimaryIPv4Address
+$localUrl = Format-IisUrl -HostName 'localhost' -Port $IisPort
+$remoteUrl = Format-IisUrl -HostName $serverIp -Port $IisPort
 
 Write-Host ""
 Write-Host "Deployment complete." -ForegroundColor Green
 Write-Host "IIS site: $SiteName"
 Write-Host "Path: $InstallPath"
 Write-Host "IIS public port: $IisPort (Node internal port: $NodePort)"
-Write-Host "Local URL:  http://localhost:${IisPort}"
-Write-Host "Remote URL: http://${serverIp}:${IisPort}"
+Write-Host "Local URL:  $localUrl"
+Write-Host "Remote URL: $remoteUrl"
 Write-Host ""
 Write-Host "Traffic is HTTP only unless you add TLS bindings separately." -ForegroundColor DarkGray

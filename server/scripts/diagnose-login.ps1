@@ -45,6 +45,19 @@ function Test-Endpoint {
     }
 }
 
+function Format-IisUrl {
+    param(
+        [string]$HostName,
+        [int]$Port
+    )
+
+    if ($Port -eq 80) {
+        return "http://${HostName}"
+    }
+
+    return "http://${HostName}:${Port}"
+}
+
 Write-Host "--- Node process ---" -ForegroundColor Cyan
 $nodeListen = Get-NetTCPConnection -State Listen -LocalPort $NodePort -ErrorAction SilentlyContinue
 if ($nodeListen) {
@@ -55,9 +68,42 @@ if ($nodeListen) {
 }
 
 Write-Host ""
+Write-Host "--- IIS bindings ---" -ForegroundColor Cyan
+Import-Module WebAdministration -ErrorAction SilentlyContinue
+if (Get-Module WebAdministration) {
+    $site = Get-Website -Name 'AD-Ops' -ErrorAction SilentlyContinue
+    if ($site) {
+        Write-Host "AD-Ops site state: $($site.state)" -ForegroundColor $(if ($site.state -eq 'Started') { 'Green' } else { 'Red' })
+        Get-WebBinding -Name 'AD-Ops' | ForEach-Object {
+            Write-Host "  AD-Ops binding: $($_.protocol) $($_.bindingInformation)"
+        }
+    } else {
+        Write-Host "IIS site 'AD-Ops' not found" -ForegroundColor Red
+    }
+
+    $port80Site = $null
+    foreach ($otherSite in Get-Website) {
+        if ($otherSite.Name -eq 'AD-Ops') { continue }
+        foreach ($binding in (Get-WebBinding -Name $otherSite.Name)) {
+            if ($binding.protocol -ne 'http') { continue }
+            $parts = $binding.bindingInformation -split ':'
+            if ($parts.Count -ge 2 -and [int]$parts[1] -eq $IisPort) {
+                $port80Site = $otherSite.Name
+                Write-Host "Port $IisPort conflict: site '$port80Site' binding $($binding.bindingInformation)" -ForegroundColor Red
+            }
+        }
+    }
+    if (-not $port80Site -and $IisPort -eq 80) {
+        Write-Host "No other IIS site is bound to port 80" -ForegroundColor Green
+    }
+} else {
+    Write-Host "WebAdministration module unavailable; skipping IIS binding checks" -ForegroundColor Yellow
+}
+
+Write-Host ""
 Write-Host "--- HTTP checks ---" -ForegroundColor Cyan
 Test-Endpoint -Label 'node-health' -Url "http://localhost:$NodePort/api/health"
-Test-Endpoint -Label 'iis-health' -Url "http://localhost:$IisPort/api/health"
+Test-Endpoint -Label 'iis-health' -Url "$(Format-IisUrl -HostName 'localhost' -Port $IisPort)/api/health"
 
 Write-Host ""
 Write-Host "--- Login API (direct to Node) ---" -ForegroundColor Cyan
@@ -75,13 +121,13 @@ if ($login) {
 Write-Host ""
 Write-Host "--- Login API (via IIS) ---" -ForegroundColor Cyan
 $iisSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
-$iisLogin = Test-Endpoint -Label 'iis-login' -Url "http://localhost:$IisPort/api/auth/login" -Extra @{
+$iisLogin = Test-Endpoint -Label 'iis-login' -Url "$(Format-IisUrl -HostName 'localhost' -Port $IisPort)/api/auth/login" -Extra @{
     Method = 'POST'
     Body = $loginBody
     Session = $iisSession
 }
 if ($iisLogin) {
-    Test-Endpoint -Label 'iis-me' -Url "http://localhost:$IisPort/api/auth/me" -Extra @{ Session = $iisSession }
+    Test-Endpoint -Label 'iis-me' -Url "$(Format-IisUrl -HostName 'localhost' -Port $IisPort)/api/auth/me" -Extra @{ Session = $iisSession }
 }
 
 Write-Host ""
@@ -93,5 +139,6 @@ if (Test-Path (Join-Path $InstallPath 'data\adops.db')) {
 }
 
 Write-Host ""
-Write-Host "If node-login works but iis-login fails, re-run setup-iis-win11.ps1 to refresh web.config." -ForegroundColor Yellow
+Write-Host "If node-login works but iis-login fails, re-run setup-iis-win11.ps1 or rebind-iis-port80.ps1 to refresh web.config." -ForegroundColor Yellow
+Write-Host "If port 80 shows the IIS welcome page, Default Web Site still owns port 80 — run rebind-iis-port80.ps1 again." -ForegroundColor Yellow
 Write-Host "If login returns 401, credentials are wrong — reset script above sets admin password." -ForegroundColor Yellow

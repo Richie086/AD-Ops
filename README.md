@@ -53,12 +53,64 @@ If login or the app broke after moving to port 3001, rebind to the default IIS p
 
 ```powershell
 cd C:\inetpub\AD-Ops\server\scripts
+git pull
 .\rebind-iis-port80.ps1
 cd C:\inetpub\AD-Ops
+.\server\scripts\diagnose-login.ps1
 .\server\scripts\reset-local-admin.ps1 -Password admin
 ```
 
 Then use **`http://<server-ip>`** (no port number) — not `:3001`.
+
+`rebind-iis-port80.ps1` stops **Default Web Site** if it still owns port 80 (common when AD-Ops was previously on 3001), refreshes `web.config`, restarts the Node task, and only removes the port 3001 firewall rule after rebind succeeds.
+
+### Troubleshooting IIS / port 80
+
+**Symptom: site worked on `:3001` but nothing loads on port 80**
+
+1. Pull latest scripts, then re-run rebind (elevated PowerShell):
+
+```powershell
+cd C:\inetpub\AD-Ops
+git pull
+cd server\scripts
+.\rebind-iis-port80.ps1
+```
+
+2. Run diagnostics:
+
+```powershell
+cd C:\inetpub\AD-Ops
+.\server\scripts\diagnose-login.ps1
+```
+
+3. If diagnostics show **Default Web Site** still on port 80, remove it manually then rebind:
+
+```powershell
+Import-Module WebAdministration
+Stop-Website -Name 'Default Web Site'
+Remove-WebBinding -Name 'Default Web Site' -BindingInformation '*:80:' -Protocol http
+cd C:\inetpub\AD-Ops\server\scripts
+.\rebind-iis-port80.ps1
+```
+
+4. Ensure AD-Ops is started and Node is listening:
+
+```powershell
+Import-Module WebAdministration
+Start-Website -Name 'AD-Ops'
+Start-ScheduledTask -TaskName 'AD-Ops-Node'
+```
+
+5. If you still browse `:3001`, that binding is removed after a successful rebind — use plain `http://<server-ip>` instead.
+
+**Symptom: IIS welcome page instead of AD-Ops**
+
+Default Web Site is still bound to port 80. Run step 3 above.
+
+**Symptom: node-health OK but iis-health fails**
+
+Reverse proxy or ARR is misconfigured. Re-run `.\rebind-iis-port80.ps1` or `.\setup-iis-win11.ps1 -SkipRepoSync`.
 
 ### Optional: IIS on a custom port (e.g. 3001)
 
