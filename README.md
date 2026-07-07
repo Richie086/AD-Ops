@@ -115,7 +115,36 @@ password: admin
 role: admin
 ```
 
-*(Note: Previous versions used a random password; it is now hardcoded to `admin` for initial setup. Change this immediately in the **Local Accounts** tab after logging in.)*
+*(Note: `admin` / `admin` is only created on a **brand-new** database. If the app was installed earlier, the admin password may be a random value from first setup — use the reset script below.)*
+
+### Locked out? Reset the admin password
+
+On the **Windows server** (PowerShell as Administrator):
+
+```powershell
+cd C:\inetpub\AD-Ops
+git pull
+npm install
+.\server\scripts\reset-local-admin.ps1 -Password admin
+```
+
+Or without the wrapper script:
+
+```powershell
+cd C:\inetpub\AD-Ops
+node server/scripts/reset-local-admin.js admin
+Stop-ScheduledTask -TaskName 'AD-Ops-Node' -ErrorAction SilentlyContinue
+Start-ScheduledTask -TaskName 'AD-Ops-Node'
+```
+
+One-shot via environment variable (add to the scheduled task, restart once, then remove it):
+
+```powershell
+$env:ADOPS_RESET_ADMIN_PASSWORD = 'admin'
+npm start
+```
+
+Then sign in at `http://<server-ip>:3001` with **admin** / **admin**.
 
 
 ### Roles

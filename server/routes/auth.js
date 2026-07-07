@@ -9,22 +9,24 @@ const router = express.Router();
 router.post('/login', (req, res) => {
   try {
     const { username, password } = req.body || {};
-    if (!username || !password) return res.status(400).json({ error: 'Username and password required' });
+    const user = String(username || '').trim();
+    const pass = String(password || '');
+    if (!user || !pass) return res.status(400).json({ error: 'Username and password required' });
 
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    const row = db.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE').get(user);
+    if (!row || !bcrypt.compareSync(pass, row.password_hash)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    req.session.userId = user.id;
-    req.session.username = user.username;
-    req.session.role = user.role;
-    logAudit(user.username, null, 'login', null);
+    req.session.userId = row.id;
+    req.session.username = row.username;
+    req.session.role = row.role;
+    logAudit(row.username, null, 'login', null);
 
     res.json({
-      username: user.username,
-      role: user.role,
-      mustChangePassword: !!user.must_change_password,
+      username: row.username,
+      role: row.role,
+      mustChangePassword: !!row.must_change_password,
     });
   } catch (err) {
     console.error('Login failed:', err);

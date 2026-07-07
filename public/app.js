@@ -94,7 +94,7 @@
     e.preventDefault();
     $('#loginError').textContent = '';
     try {
-      const username = $('#loginUsername').value;
+      const username = $('#loginUsername').value.trim();
       const password = $('#loginPassword').value;
       const result = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) });
       if (result.mustChangePassword) {

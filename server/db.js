@@ -114,7 +114,7 @@ const VALID_ROLES = ['viewer', 'operator', 'admin'];
 // Bootstrap a default local admin account on first run only.
 const adminUser = db.prepare("SELECT * FROM users WHERE username = 'admin'").get();
 if (!adminUser) {
-  const defaultPassword = 'admin';
+  const defaultPassword = process.env.ADOPS_BOOTSTRAP_ADMIN_PASSWORD || 'admin';
   const hash = bcrypt.hashSync(defaultPassword, 12);
   db.prepare('INSERT INTO users (username, password_hash, role, must_change_password) VALUES (?, ?, ?, 0)')
     .run('admin', hash, 'admin');
@@ -122,6 +122,22 @@ if (!adminUser) {
   console.log(' Bootstrap: created local login "admin" (role: admin)');
   console.log(' Default password: ' + defaultPassword);
   console.log('============================================================');
+}
+
+// One-shot recovery: set ADOPS_RESET_ADMIN_PASSWORD before starting Node to force-reset admin.
+if (process.env.ADOPS_RESET_ADMIN_PASSWORD) {
+  const resetPassword = process.env.ADOPS_RESET_ADMIN_PASSWORD;
+  const hash = bcrypt.hashSync(resetPassword, 12);
+  const existing = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+  if (existing) {
+    db.prepare("UPDATE users SET password_hash = ?, must_change_password = 0, role = 'admin' WHERE username = 'admin'")
+      .run(hash);
+    console.log('============================================================');
+    console.log(' Recovery: reset local login "admin" password (ADOPS_RESET_ADMIN_PASSWORD)');
+    console.log(' New password: ' + resetPassword);
+    console.log(' Remove ADOPS_RESET_ADMIN_PASSWORD from the environment after login.');
+    console.log('============================================================');
+  }
 }
 
 function logAudit(username, domainLabel, action, detail) {

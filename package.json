@@ -4,7 +4,8 @@
   "description": "Local web console for querying and managing Active Directory over WinRM, with markdown/text/xml/html reporting.",
   "main": "server/app.js",
   "scripts": {
-    "start": "node server/app.js"
+    "start": "node server/app.js",
+    "reset-admin": "node server/scripts/reset-local-admin.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
