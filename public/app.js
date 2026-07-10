@@ -1178,8 +1178,27 @@
   // ---------- Error display ----------
   function showError(err) {
     const banner = $('#errorBanner');
-    banner.textContent = err.message || 'An error occurred.';
+    const status = err.status != null ? ` status=${err.status}` : '';
+    banner.textContent = `[ADOPS-DEBUG${status}] ${err.message || 'An error occurred.'}`;
     banner.classList.remove('hidden');
+    // #region agent log
+    fetch('/api/debug-logs', { credentials: 'same-origin' })
+      .then((r) => r.json())
+      .then((payload) => {
+        const recent = (payload.entries || []).slice(-8);
+        dbg('H5', 'app.js:showError', 'error banner shown', {
+          status: err.status || null,
+          msg: String(err.message || err).slice(0, 300),
+          recentCount: recent.length,
+          recent: recent.map((e) => ({ h: e.hypothesisId, loc: e.location, msg: e.message, data: e.data })),
+        });
+        if (recent.length) {
+          const summary = recent.map((e) => `${e.hypothesisId}:${e.location}:${e.message}`).join(' | ');
+          banner.textContent = `[ADOPS-DEBUG${status}] ${err.message || 'An error occurred.'} :: ${summary}`.slice(0, 1500);
+        }
+      })
+      .catch(() => {});
+    // #endregion
     if (err.raw && !state.lastResult?.raw) {
       state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Error details' };
       renderResults();
