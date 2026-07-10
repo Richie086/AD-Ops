@@ -78,6 +78,27 @@ app.get('/api/health', (req, res) => {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+// #region agent log
+const debugLog = require('./debugLog');
+app.post('/api/debug-logs', express.json(), (req, res) => {
+  const body = req.body || {};
+  debugLog.append({
+    runId: body.runId || 'query-pre',
+    hypothesisId: body.hypothesisId || 'H?',
+    location: body.location || 'client',
+    message: body.message || '',
+    data: body.data || {},
+  });
+  res.json({ ok: true });
+});
+app.get('/api/debug-logs', (req, res) => {
+  res.json({ ok: true, entries: debugLog.list(), logPath: debugLog.LOG_PATH });
+});
+app.delete('/api/debug-logs', (req, res) => {
+  debugLog.clear();
+  res.json({ ok: true });
+});
+// #endregion
 app.use('/api/settings', settingsRoutes);
 app.use('/api/domains', requireLogin, domainsRoutes); // per-route role checks inside (viewer can GET/connect; operator+ can add/delete)
 app.use('/api/ad', requireLogin, adRoutes); // read-only AD queries: all roles (viewer, operator, admin)

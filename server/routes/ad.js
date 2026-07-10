@@ -3,8 +3,15 @@ const { db, logAudit, recordHistory } = require('../db');
 const { runRemote, psEscapeLiteral } = require('../psRunner');
 const { requireDomainSession } = require('./domains');
 const { requireFeature } = require('../settings');
+const debugLog = require('../debugLog');
 
 const router = express.Router();
+
+// #region agent log
+function agentLog(hypothesisId, location, message, data) {
+  debugLog.append({ runId: 'query-pre', hypothesisId, location, message, data });
+}
+// #endregion
 
 // Prepended to AD query scripts so every attribute serializes cleanly to JSON.
 const AD_SERIALIZE_HELPER = `
@@ -79,13 +86,24 @@ function titleFromLabel(actionLabel) {
 
 async function runQuery(req, res, scriptBody, args, actionLabel) {
   const { domainId } = req.body || {};
+  // #region agent log
+  agentLog('H2', 'ad.js:runQuery:entry', 'AD query received', { actionLabel, domainId, path: req.path, hasSession: !!(req.session && req.session.userId), sessionIdLen: req.sessionID ? String(req.sessionID).length : 0 });
+  // #endregion
   const domain = getDomain(domainId);
   if (!domain) return res.status(404).json({ error: 'Domain not found' });
 
   const creds = requireDomainSession(req, res, domainId);
-  if (!creds) return;
+  if (!creds) {
+    // #region agent log
+    agentLog('H3', 'ad.js:runQuery:noCreds', 'missing domain session creds', { actionLabel, domainId });
+    // #endregion
+    return;
+  }
 
   const result = await runRemote(domain.dc_host, creds.username, creds.password, scriptBody, args, { useSsl: !!domain.use_ssl });
+  // #region agent log
+  agentLog(result.ok ? 'H5' : 'H4', 'ad.js:runQuery:result', 'runRemote finished', { actionLabel, ok: !!result.ok, error: result.error ? String(result.error).slice(0, 300) : null, dataIsArray: Array.isArray(result.data), dataLen: Array.isArray(result.data) ? result.data.length : null });
+  // #endregion
   logAudit(req.session.username, domain.label, actionLabel, JSON.stringify(args).slice(0, 500));
 
   const title = titleFromLabel(actionLabel);

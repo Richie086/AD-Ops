@@ -1,4 +1,14 @@
 (() => {
+  // #region agent log
+  const dbg = (hypothesisId, location, message, data) => {
+    fetch('/api/debug-logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ runId: 'query-pre', hypothesisId, location, message, data }),
+    }).catch(() => {});
+  };
+  // #endregion
   const api = async (url, opts = {}) => {
     const res = await fetch(url, {
       headers: { 'Content-Type': 'application/json' },
@@ -421,10 +431,16 @@
         }),
       });
       state.connected = true;
+      // #region agent log
+      dbg('H3', 'app.js:connect:ok', 'domain connect succeeded', { domainId: state.selectedDomainId });
+      // #endregion
       updateConnStatus();
       closeConnectModal();
     } catch (err) {
       state.connected = false;
+      // #region agent log
+      dbg('H4', 'app.js:connect:error', 'domain connect failed', { domainId: state.selectedDomainId, status: err.status || null, msg: String(err.message || err).slice(0, 300) });
+      // #endregion
       updateConnStatus();
       $('#connectModalError').textContent = err.message;
       if (err.raw || err.command) {
@@ -664,6 +680,9 @@
   $$('.query-form[data-endpoint]').forEach((form) => {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // #region agent log
+      dbg('H1', 'app.js:queryForm:submit', 'query form submit', { endpoint: form.dataset.endpoint || null, domainId: state.selectedDomainId, connected: !!state.connected });
+      // #endregion
       if (!requireConnection()) return;
       const endpoint = form.dataset.endpoint;
       const bodyField = form.dataset.body;
@@ -672,7 +691,14 @@
         const input = form.querySelector(`[name="${bodyField}"]`);
         payload[bodyField] = input ? input.value : '';
       }
-      await runQuery(endpoint, payload, form.querySelector('button').textContent.trim());
+      try {
+        await runQuery(endpoint, payload, form.querySelector('button').textContent.trim());
+      } catch (err) {
+        // #region agent log
+        dbg('H5', 'app.js:queryForm:uncaught', 'query form uncaught error', { endpoint, msg: String(err && err.message || err).slice(0, 200) });
+        // #endregion
+        showError(err);
+      }
     });
   });
 
@@ -708,7 +734,11 @@
   });
 
   function requireConnection() {
-    if (!state.selectedDomainId || !state.connected) {
+    const ok = !!(state.selectedDomainId && state.connected);
+    // #region agent log
+    dbg('H1', 'app.js:requireConnection', 'connection gate', { ok, domainId: state.selectedDomainId, connected: !!state.connected });
+    // #endregion
+    if (!ok) {
       showError({ message: 'Connect to a saved domain first (top bar).' });
       return false;
     }
@@ -734,6 +764,9 @@
     state.resultView = endpoint === '/api/ad/ou-tree' ? 'diagram' : 'table';
     try {
       const result = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
+      // #region agent log
+      dbg('H5', 'app.js:runQuery:ok', 'query API success', { endpoint, title, hasData: result.data != null, dataType: Array.isArray(result.data) ? 'array' : typeof result.data, dataLen: Array.isArray(result.data) ? result.data.length : null });
+      // #endregion
       state.lastResult = {
         data: result.data,
         raw: result.raw,
@@ -743,6 +776,9 @@
       };
       renderResults();
     } catch (err) {
+      // #region agent log
+      dbg(err.status === 401 ? 'H2' : err.status === 440 ? 'H3' : err.status >= 500 ? 'H4' : 'H5', 'app.js:runQuery:error', 'query API failed', { endpoint, title, status: err.status || null, msg: String(err.message || err).slice(0, 300) });
+      // #endregion
       state.lastResult = { data: null, raw: err.raw, command: err.command, title, meta: null };
       renderResults();
       showError(err);
