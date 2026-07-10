@@ -505,8 +505,6 @@
     });
   }
 
-  }
-
   // ---------- Admin panel ----------
   function populateAdminForm(settings) {
     $('#adminAppTitle').value = settings.branding?.appTitle || 'AD Ops';
