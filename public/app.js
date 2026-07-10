@@ -1,11 +1,17 @@
 (() => {
   // #region agent log
   const dbg = (hypothesisId, location, message, data) => {
+    const payload = { sessionId: 'db110a', runId: 'query-pre', hypothesisId, location, message, data, timestamp: Date.now() };
     fetch('/api/debug-logs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: JSON.stringify({ runId: 'query-pre', hypothesisId, location, message, data }),
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+    fetch('http://127.0.0.1:7302/ingest/58a9044e-a6d6-4a36-a929-3ab684257a8b', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': 'db110a' },
+      body: JSON.stringify(payload),
     }).catch(() => {});
   };
   // #endregion
@@ -1179,25 +1185,30 @@
   function showError(err) {
     const banner = $('#errorBanner');
     const status = err.status != null ? ` status=${err.status}` : '';
-    banner.textContent = `[ADOPS-DEBUG${status}] ${err.message || 'An error occurred.'}`;
+    const base = `[ADOPS-DEBUG${status}] ${err.message || 'An error occurred.'}`;
+    banner.textContent = base;
     banner.classList.remove('hidden');
     // #region agent log
+    const publish = (text) => {
+      banner.textContent = text;
+      dbg('H5', 'app.js:showError', 'error banner shown', {
+        status: err.status || null,
+        msg: String(err.message || err).slice(0, 300),
+        banner: text.slice(0, 500),
+      });
+    };
     fetch('/api/debug-logs', { credentials: 'same-origin' })
       .then((r) => r.json())
       .then((payload) => {
         const recent = (payload.entries || []).slice(-8);
-        dbg('H5', 'app.js:showError', 'error banner shown', {
-          status: err.status || null,
-          msg: String(err.message || err).slice(0, 300),
-          recentCount: recent.length,
-          recent: recent.map((e) => ({ h: e.hypothesisId, loc: e.location, msg: e.message, data: e.data })),
-        });
         if (recent.length) {
           const summary = recent.map((e) => `${e.hypothesisId}:${e.location}:${e.message}`).join(' | ');
-          banner.textContent = `[ADOPS-DEBUG${status}] ${err.message || 'An error occurred.'} :: ${summary}`.slice(0, 1500);
+          publish(`${base} :: ${summary}`.slice(0, 1500));
+        } else {
+          publish(base);
         }
       })
-      .catch(() => {});
+      .catch(() => publish(base));
     // #endregion
     if (err.raw && !state.lastResult?.raw) {
       state.lastResult = { data: null, raw: err.raw, command: err.command, title: 'Error details' };
